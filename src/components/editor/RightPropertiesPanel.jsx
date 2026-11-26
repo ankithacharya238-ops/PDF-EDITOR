@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   AlignCenter,
@@ -8,24 +8,40 @@ import {
   ArrowDownToLine,
   ArrowUpToLine,
   Bold,
+  ChevronDown,
   Copy,
   FilePlus2,
   ImagePlus,
   Italic,
   Lock,
+  RotateCcw,
   RotateCw,
+  Search,
+  Sparkles,
   Trash2,
+  Type,
   Underline,
   Unlock,
 } from 'lucide-react';
-import { COLOR_SWATCHES, FONT_OPTIONS, HIGHLIGHT_COLORS } from '../../config/editorConfig';
+import {
+  COLOR_SWATCHES,
+  FONT_CATEGORIES,
+  FONT_OPTIONS,
+  FONT_WEIGHT_OPTIONS,
+  HIGHLIGHT_COLORS,
+  SHARPENING_PRESETS,
+  resolveFontOption,
+} from '../../config/editorConfig';
 
 export default function RightPropertiesPanel({
   selectedObject,
   activeTool,
+  sharpeningLevel,
+  onChangeSharpeningLevel,
   drawSettings,
   onChangeDrawSettings,
   onUpdateSelected,
+  onResetSelectedText,
   onReplaceSelectedImage,
   onDeleteSelected,
   onBringForward,
@@ -40,6 +56,9 @@ export default function RightPropertiesPanel({
   inDrawer = false,
 }) {
   const replaceImgRef = useRef(null);
+  const [fontCategory, setFontCategory] = useState('all');
+  const [fontSearch, setFontSearch] = useState('');
+  const [fontPickerOpen, setFontPickerOpen] = useState(false);
 
   const handleReplaceFile = (file) => {
     if (!file) return;
@@ -52,12 +71,33 @@ export default function RightPropertiesPanel({
     reader.readAsDataURL(file);
   };
 
+  const filteredFonts = useMemo(() => {
+    return FONT_OPTIONS.filter((f) => {
+      const catMatch = fontCategory === 'all' || f.category === fontCategory;
+      const q = fontSearch.trim().toLowerCase();
+      const textMatch =
+        !q ||
+        f.label.toLowerCase().includes(q) ||
+        f.category.toLowerCase().includes(q) ||
+        f.tags.some((t) => t.includes(q));
+      return catMatch && textMatch;
+    });
+  }, [fontCategory, fontSearch]);
+
+  const activeFontObj = useMemo(
+    () => resolveFontOption(selectedObject?.nexFontId),
+    [selectedObject?.nexFontId]
+  );
+
+  const isBoldActive =
+    selectedObject?.fontWeight === 'bold' || Number(selectedObject?.fontWeight || 400) >= 600;
+
   return (
     <aside
       className={
         inDrawer
           ? 'w-full flex flex-col gap-5'
-          : 'w-72 shrink-0 glass-panel border-l border-white/10 p-4 overflow-y-auto z-20 hidden md:flex flex-col gap-5'
+          : 'w-80 shrink-0 glass-panel border-l border-white/10 p-4 overflow-y-auto z-20 hidden md:flex flex-col gap-5'
       }
     >
       <input
@@ -71,87 +111,294 @@ export default function RightPropertiesPanel({
         }}
       />
 
+      {/* GLOBAL FONT SHARPENING CONTROL (always accessible) */}
+      <div className="rounded-xl bg-slate-900/75 border border-cyan-400/20 p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-semibold text-cyan-200 flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
+            Font Sharpening
+          </span>
+          <span className="text-[10px] font-mono text-emerald-300">
+            {SHARPENING_PRESETS.find((s) => s.id === sharpeningLevel)?.label}
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-1 p-1 rounded-lg bg-slate-950/80 border border-white/10">
+          {SHARPENING_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => onChangeSharpeningLevel(preset.id)}
+              title={preset.desc}
+              className={`py-1 px-1.5 rounded-md text-[10px] font-semibold transition-all ${
+                sharpeningLevel === preset.id
+                  ? 'bg-gradient-to-r from-violet-600 to-cyan-500 text-white shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-slate-400 leading-tight">
+          {SHARPENING_PRESETS.find((s) => s.id === sharpeningLevel)?.desc} — prevents blurry canvas text.
+        </p>
+      </div>
+
       {/* TEXT PROPERTIES */}
       {selectedObject?.kind === 'text' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
-            <h3 className="font-display text-sm font-bold text-white">Text Properties</h3>
-            <button
-              type="button"
-              onClick={onDeleteSelected}
-              className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-500/15 transition-colors"
-              title="Delete text"
+            <h3 className="font-display text-sm font-bold text-white flex items-center gap-1.5">
+              <Type className="w-4 h-4 text-cyan-300" />
+              Text & Font Studio
+            </h3>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={onResetSelectedText}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-cyan-300 transition-colors"
+                title={
+                  selectedObject.hasOriginalFormat
+                    ? 'Reset formatting to original PDF style'
+                    : 'Reset formatting to default'
+                }
+              >
+                <RotateCcw className="w-3 h-3" />
+                Reset
+              </button>
+              <button
+                type="button"
+                onClick={onDeleteSelected}
+                className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-500/15 transition-colors"
+                title="Delete text"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Live Typography Preview */}
+          <div className="rounded-xl bg-white p-3 border border-cyan-400/40 shadow-inner overflow-hidden">
+            <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
+              <span className="font-semibold uppercase tracking-wider text-slate-500">
+                Live Preview
+              </span>
+              <span className="font-mono text-slate-500">
+                {activeFontObj.label} • {selectedObject.fontSize}pt • w{selectedObject.fontWeight}
+              </span>
+            </div>
+            <div
+              style={{
+                fontFamily: activeFontObj.cssFamily,
+                fontSize: `${Math.min(26, Math.max(12, selectedObject.fontSize))}px`,
+                fontWeight: selectedObject.fontWeight || '400',
+                fontStyle: selectedObject.fontStyle || 'normal',
+                textDecoration: selectedObject.underline ? 'underline' : 'none',
+                color: selectedObject.fill || '#0f172a',
+                textAlign: selectedObject.textAlign || 'left',
+                letterSpacing: `${(selectedObject.charSpacing || 0) / 1000}em`,
+                lineHeight: selectedObject.lineHeight || 1.2,
+                WebkitFontSmoothing: 'antialiased',
+                textRendering: 'geometricPrecision',
+              }}
+              className="truncate py-1 rounded px-1 bg-slate-100/70"
             >
-              <Trash2 className="w-4 h-4" />
-            </button>
+              {selectedObject.text?.trim() || 'Aa Bb Cc — Sample Preview 123'}
+            </div>
           </div>
 
           {selectedObject.nexFontSubstituted && (
             <div className="rounded-xl bg-amber-500/10 border border-amber-400/35 p-2.5 text-[11px] text-amber-200 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
               <div>
-                <span className="font-semibold block">Embedded Font Substitution</span>
-                Original PDF uses subset font{' '}
-                <code className="font-mono text-amber-300">{selectedObject.nexOriginalFont || 'Embedded'}</code>.
-                Export uses <strong className="text-white">{selectedObject.nexFontId}</strong>.
+                <span className="font-semibold block">Embedded Font Preserved Visually</span>
+                PDF subset{' '}
+                <code className="font-mono text-amber-300">{selectedObject.nexOriginalFont || 'Embedded'}</code>{' '}
+                kept size/weight/color; exports with <strong className="text-white">{activeFontObj.label}</strong>.
               </div>
             </div>
           )}
 
+          {/* Text Content */}
           <div>
             <label className="block text-[11px] text-slate-400 mb-1">Text Content</label>
             <textarea
-              rows={3}
+              rows={2}
               value={selectedObject.text}
               onChange={(e) => onUpdateSelected({ text: e.target.value })}
               className="w-full rounded-xl bg-slate-900/85 border border-white/10 px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 resize-y"
             />
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
-            <div className="col-span-2">
-              <label className="block text-[11px] text-slate-400 mb-1">Font Family</label>
-              <select
-                value={selectedObject.nexFontId}
-                onChange={(e) => onUpdateSelected({ fontFamilyId: e.target.value })}
-                className="w-full rounded-xl bg-slate-900/85 border border-white/10 px-2.5 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
-              >
-                {FONT_OPTIONS.map((f) => (
-                  <option key={f.id} value={f.id} className="bg-slate-900">
-                    {f.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] text-slate-400 mb-1">Size</label>
-              <input
-                type="number"
-                min={6}
-                max={144}
-                value={selectedObject.fontSize}
-                onChange={(e) => onUpdateSelected({ fontSize: Math.max(6, Number(e.target.value) || 12) })}
-                className="w-full rounded-xl bg-slate-900/85 border border-white/10 px-2.5 py-2 text-xs text-white font-mono focus:outline-none focus:border-cyan-400"
+          {/* Categorized Font Family Selector with Preview */}
+          <div className="space-y-1.5 relative">
+            <label className="block text-[11px] text-slate-400">
+              Font Family ({FONT_OPTIONS.length} families)
+            </label>
+            <button
+              type="button"
+              onClick={() => setFontPickerOpen((o) => !o)}
+              className="w-full flex items-center justify-between gap-2 rounded-xl bg-slate-900/90 border border-white/15 hover:border-cyan-400/60 px-3 py-2 text-left transition-colors"
+            >
+              <div className="min-w-0">
+                <div
+                  style={{ fontFamily: activeFontObj.cssFamily }}
+                  className="text-sm text-white truncate"
+                >
+                  {activeFontObj.label}
+                </div>
+                <div className="text-[10px] text-cyan-300/80 capitalize">{activeFontObj.category}</div>
+              </div>
+              <ChevronDown
+                className={`w-4 h-4 text-slate-400 transition-transform ${
+                  fontPickerOpen ? 'rotate-180' : ''
+                }`}
               />
-            </div>
+            </button>
+
+            {fontPickerOpen && (
+              <div className="rounded-xl bg-[#090e24] border border-cyan-400/35 shadow-2xl p-2 space-y-2 z-30">
+                {/* Search */}
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={fontSearch}
+                    onChange={(e) => setFontSearch(e.target.value)}
+                    placeholder="Search serif, cursive, Roboto..."
+                    className="w-full pl-8 pr-2.5 py-1.5 rounded-lg bg-slate-900 border border-white/10 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+
+                {/* Category Filter Pills */}
+                <div className="flex flex-wrap gap-1">
+                  {FONT_CATEGORIES.map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setFontCategory(cat.id)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-medium transition-colors ${
+                        fontCategory === cat.id
+                          ? 'bg-violet-600 text-white'
+                          : 'bg-slate-900 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Font List */}
+                <div className="max-h-52 overflow-y-auto space-y-1 pr-1">
+                  {filteredFonts.map((f) => {
+                    const selected = f.id === activeFontObj.id;
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => {
+                          onUpdateSelected({ fontFamilyId: f.id });
+                          setFontPickerOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors ${
+                          selected
+                            ? 'bg-cyan-500/20 border border-cyan-400/50 text-white'
+                            : 'hover:bg-white/5 text-slate-200 border border-transparent'
+                        }`}
+                      >
+                        <span style={{ fontFamily: f.cssFamily }} className="text-sm truncate">
+                          {f.label}
+                        </span>
+                        <span className="text-[9px] uppercase tracking-wider text-slate-400 shrink-0 ml-2">
+                          {f.category}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {filteredFonts.length === 0 && (
+                    <p className="text-xs text-slate-500 text-center py-3">No matching fonts</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Style & Alignment */}
+          {/* Font Size Slider + Numeric Input */}
+          <div>
+            <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
+              <span>Font Size</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateSelected({ fontSize: Math.max(6, (selectedObject.fontSize || 16) - 1) })
+                  }
+                  className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-white text-xs"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min={6}
+                  max={144}
+                  value={selectedObject.fontSize}
+                  onChange={(e) =>
+                    onUpdateSelected({ fontSize: Math.max(6, Number(e.target.value) || 12) })
+                  }
+                  className="w-14 rounded-lg bg-slate-900/85 border border-white/10 px-1.5 py-0.5 text-xs text-center text-white font-mono focus:outline-none focus:border-cyan-400"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateSelected({ fontSize: Math.min(144, (selectedObject.fontSize || 16) + 1) })
+                  }
+                  className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-white text-xs"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={8}
+              max={96}
+              step={1}
+              value={Math.min(96, selectedObject.fontSize || 16)}
+              onChange={(e) => onUpdateSelected({ fontSize: parseInt(e.target.value, 10) })}
+              className="w-full accent-cyan-400"
+            />
+          </div>
+
+          {/* Font Weight Selector */}
+          <div>
+            <label className="block text-[11px] text-slate-400 mb-1">Font Weight</label>
+            <select
+              value={selectedObject.fontWeight || '400'}
+              onChange={(e) => onUpdateSelected({ fontWeight: e.target.value })}
+              className="w-full rounded-xl bg-slate-900/85 border border-white/10 px-2.5 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+            >
+              {FONT_WEIGHT_OPTIONS.map((w) => (
+                <option key={w.value} value={w.value} className="bg-slate-900">
+                  {w.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Bold / Italic / Underline & Alignment */}
           <div className="grid grid-cols-2 gap-2">
             <div className="flex items-center gap-1 bg-slate-900/80 border border-white/10 rounded-xl p-1">
               <button
                 type="button"
                 onClick={() =>
                   onUpdateSelected({
-                    fontWeight: selectedObject.fontWeight === 'bold' ? 'normal' : 'bold',
+                    fontWeight: isBoldActive ? '400' : '700',
                   })
                 }
                 className={`flex-1 py-1.5 rounded-lg flex justify-center transition-colors ${
-                  selectedObject.fontWeight === 'bold'
-                    ? 'bg-violet-500/35 text-white'
-                    : 'text-slate-400 hover:text-white'
+                  isBoldActive ? 'bg-violet-500/35 text-white' : 'text-slate-400 hover:text-white'
                 }`}
-                title="Bold"
+                title="Bold (700)"
               >
                 <Bold className="w-3.5 h-3.5" />
               </button>
@@ -209,16 +456,21 @@ export default function RightPropertiesPanel({
             </div>
           </div>
 
-          {/* Color */}
+          {/* Color Picker */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-[11px] text-slate-400">Text Color</label>
-              <input
-                type="color"
-                value={selectedObject.fill?.startsWith('#') ? selectedObject.fill : '#0f172a'}
-                onChange={(e) => onUpdateSelected({ fill: e.target.value })}
-                className="w-6 h-6 rounded cursor-pointer bg-transparent border-0"
-              />
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] text-slate-300 uppercase">
+                  {selectedObject.fill}
+                </span>
+                <input
+                  type="color"
+                  value={selectedObject.fill?.startsWith('#') ? selectedObject.fill : '#0f172a'}
+                  onChange={(e) => onUpdateSelected({ fill: e.target.value })}
+                  className="w-6 h-6 rounded cursor-pointer bg-transparent border-0"
+                />
+              </div>
             </div>
             <div className="flex flex-wrap gap-1.5">
               {COLOR_SWATCHES.map((c) => (
@@ -228,7 +480,7 @@ export default function RightPropertiesPanel({
                   onClick={() => onUpdateSelected({ fill: c })}
                   style={{ backgroundColor: c }}
                   className={`w-5 h-5 rounded-full border ${
-                    selectedObject.fill === c ? 'border-cyan-400 scale-110' : 'border-white/25'
+                    selectedObject.fill?.toLowerCase() === c ? 'border-cyan-400 scale-110' : 'border-white/25'
                   }`}
                 />
               ))}
@@ -562,55 +814,57 @@ export default function RightPropertiesPanel({
       )}
 
       {/* BRUSH / HIGHLIGHT TOOL SETTINGS WHEN NOTHING SELECTED */}
-      {!selectedObject && (activeTool === 'draw' || activeTool === 'highlight' || activeTool === 'shapes' || activeTool === 'underline') && (
-        <div className="space-y-4 border-b border-white/10 pb-4">
-          <h3 className="font-display text-sm font-bold text-white capitalize">
-            {activeTool} Tool Settings
-          </h3>
+      {!selectedObject &&
+        (activeTool === 'draw' || activeTool === 'highlight' || activeTool === 'shapes' || activeTool === 'underline') && (
+          <div className="space-y-4 border-b border-white/10 pb-4">
+            <h3 className="font-display text-sm font-bold text-white capitalize">
+              {activeTool} Tool Settings
+            </h3>
 
-          <div>
-            <label className="block text-[11px] text-slate-400 mb-1.5">Active Color</label>
-            <div className="flex flex-wrap gap-1.5">
-              {(activeTool === 'highlight' ? HIGHLIGHT_COLORS : COLOR_SWATCHES).map((c) => {
-                const current = activeTool === 'highlight' ? drawSettings.highlightColor : drawSettings.color;
-                return (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() =>
-                      onChangeDrawSettings(
-                        activeTool === 'highlight' ? { highlightColor: c } : { color: c }
-                      )
-                    }
-                    style={{ backgroundColor: c }}
-                    className={`w-5 h-5 rounded-full border ${
-                      current === c ? 'border-cyan-400 scale-110' : 'border-white/25'
-                    }`}
-                  />
-                );
-              })}
-            </div>
-          </div>
-
-          {activeTool === 'draw' && (
             <div>
-              <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                <span>Brush Width</span>
-                <span className="font-mono text-cyan-300">{drawSettings.strokeWidth}px</span>
+              <label className="block text-[11px] text-slate-400 mb-1.5">Active Color</label>
+              <div className="flex flex-wrap gap-1.5">
+                {(activeTool === 'highlight' ? HIGHLIGHT_COLORS : COLOR_SWATCHES).map((c) => {
+                  const current =
+                    activeTool === 'highlight' ? drawSettings.highlightColor : drawSettings.color;
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() =>
+                        onChangeDrawSettings(
+                          activeTool === 'highlight' ? { highlightColor: c } : { color: c }
+                        )
+                      }
+                      style={{ backgroundColor: c }}
+                      className={`w-5 h-5 rounded-full border ${
+                        current === c ? 'border-cyan-400 scale-110' : 'border-white/25'
+                      }`}
+                    />
+                  );
+                })}
               </div>
-              <input
-                type="range"
-                min={1}
-                max={14}
-                step={0.5}
-                value={drawSettings.strokeWidth}
-                onChange={(e) => onChangeDrawSettings({ strokeWidth: parseFloat(e.target.value) })}
-                className="w-full accent-cyan-400"
-              />
             </div>
-          )}
-        </div>
-      )}
+
+            {activeTool === 'draw' && (
+              <div>
+                <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                  <span>Brush Width</span>
+                  <span className="font-mono text-cyan-300">{drawSettings.strokeWidth}px</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={14}
+                  step={0.5}
+                  value={drawSettings.strokeWidth}
+                  onChange={(e) => onChangeDrawSettings({ strokeWidth: parseFloat(e.target.value) })}
+                  className="w-full accent-cyan-400"
+                />
+              </div>
+            )}
+          </div>
+        )}
 
       {/* PAGE INSPECTOR & MANAGEMENT */}
       {!selectedObject && activePage && (

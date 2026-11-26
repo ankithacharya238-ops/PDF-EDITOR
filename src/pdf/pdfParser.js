@@ -1,4 +1,7 @@
 import { pdfjsLib } from './pdfjsSetup.js';
+import { guessFontInfo } from './fontUtils.js';
+
+export { guessFontInfo };
 
 const { OPS, Util } = pdfjsLib;
 
@@ -11,28 +14,6 @@ function multiplyMatrices(m1, m2) {
     m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
     m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
   ];
-}
-
-function guessFontInfo(rawFontName = '') {
-  const lower = rawFontName.toLowerCase();
-  const isBold = /bold|black|heavy|demi|semibold|700|800/.test(lower);
-  const isItalic = /italic|oblique|slant/.test(lower);
-  const isEmbeddedSubset = /^[A-Z]{6}\+/.test(rawFontName) || (!/helvetica|arial|times|courier|sans|serif|mono/.test(lower) && rawFontName.length > 0);
-
-  let mappedFamily = 'Helvetica';
-  if (/times|serif|georgia|garamond|cambria|palatino|playfair/.test(lower)) {
-    mappedFamily = 'Times';
-  } else if (/courier|mono|consolas|code|jetbrains|menlo/.test(lower)) {
-    mappedFamily = 'Courier';
-  }
-
-  return {
-    rawFontName,
-    mappedFamily,
-    isBold,
-    isItalic,
-    isEmbeddedSubset,
-  };
 }
 
 function imageObjectToDataUrl(imgObj) {
@@ -72,7 +53,6 @@ function imageObjectToDataUrl(imgObj) {
         dst[j + 3] = 255;
       }
     } else if (kind === 1) {
-      // 1bpp mask
       let bitIdx = 0;
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
@@ -101,8 +81,8 @@ function imageObjectToDataUrl(imgObj) {
 /**
  * Renders a PDF.js page onto a high-DPI HTML canvas without altering layout.
  */
-export async function renderPdfPageToCanvas(page, canvas, scale = 1) {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+export async function renderPdfPageToCanvas(page, canvas, scale = 1, sharpScale = 1) {
+  const dpr = Math.min(3, Math.max(window.devicePixelRatio || 1, sharpScale));
   const viewport = page.getViewport({ scale });
   const renderViewport = page.getViewport({ scale: scale * dpr });
 
@@ -124,7 +104,7 @@ export async function renderPdfPageToCanvas(page, canvas, scale = 1) {
 }
 
 /**
- * Extracts editable grouped text blocks (with exact PDF coordinates & font metadata)
+ * Extracts editable grouped text blocks (with exact PDF coordinates, weight, & font metadata)
  * and existing embedded image XObjects (with bounding boxes & extracted PNG data URLs).
  */
 export async function extractPageMetadata(page, pageIndex) {
@@ -132,7 +112,6 @@ export async function extractPageMetadata(page, pageIndex) {
   const opList = await page.getOperatorList();
   const textContent = await page.getTextContent({ includeMarkedContent: false });
 
-  // 1. Extract embedded images via operator list CTM tracking
   const images = [];
   const ctmStack = [];
   let ctm = [1, 0, 0, 1, 0, 0];
@@ -149,7 +128,6 @@ export async function extractPageMetadata(page, pageIndex) {
       ctm = multiplyMatrices(ctm, args);
     } else if (fn === OPS.paintImageXObject || fn === OPS.paintImageXObjectRepeat) {
       const imgName = args[0];
-      // Image unit square in user space is (0,0)->(1,1) transformed by CTM
       const corners = [
         [0, 0],
         [1, 0],
@@ -168,7 +146,6 @@ export async function extractPageMetadata(page, pageIndex) {
       const width = Math.max(...xs) - left;
       const height = Math.max(...ys) - top;
 
-      // PDF space bounding box
       const pdfCorners = [
         [0, 0],
         [1, 0],
@@ -210,7 +187,6 @@ export async function extractPageMetadata(page, pageIndex) {
     }
   }
 
-  // 2. Extract and group text runs into logical editable lines
   const rawItems = [];
   for (const item of textContent.items) {
     if (!item.str || !item.str.trim()) continue;
@@ -218,7 +194,6 @@ export async function extractPageMetadata(page, pageIndex) {
     const fontSize = Math.hypot(item.transform[0], item.transform[1]) || item.height || 12;
     const vpFontSize = Math.hypot(tx[0], tx[1]) || fontSize;
 
-    // Resolve real font name if loaded in commonObjs
     let realFontName = item.fontName || '';
     try {
       if (page.commonObjs.has(item.fontName)) {
@@ -252,7 +227,6 @@ export async function extractPageMetadata(page, pageIndex) {
     });
   }
 
-  // Sort top-to-bottom then left-to-right for stable grouping
   rawItems.sort((a, b) => {
     if (Math.abs(a.baselineY - b.baselineY) > 4) return a.baselineY - b.baselineY;
     return a.left - b.left;

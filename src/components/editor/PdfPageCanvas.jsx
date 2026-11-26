@@ -1,33 +1,83 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { fabric } from 'fabric';
 import { AlertTriangle, Move, Trash2 } from 'lucide-react';
-import { FONT_OPTIONS } from '../../config/editorConfig';
+import {
+  DEFAULT_TEXT_STYLE,
+  SHARPENING_PRESETS,
+  resolveFontOption,
+} from '../../config/editorConfig';
 
 const CUSTOM_PROPS = [
   'nexFontId',
   'nexFontSubstituted',
   'nexOriginalFont',
+  'nexOriginalFormat',
   'nexKind',
   'nexShapeType',
   'nexLockAspect',
   'pathOffset',
+  'objectCaching',
 ];
 
-function sampleCanvasBgColor(canvas, left, top, width, height, scale) {
+function rgbToHex(r, g, b) {
+  const toHex = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+/**
+ * Samples both the surrounding background color and the dominant foreground ink color
+ * inside a PDF text bounding box so clicking existing PDF text preserves its real color.
+ */
+function sampleCanvasBgAndFgColor(canvas, left, top, width, height, scale) {
   try {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    const dpr = canvas.width / (parseFloat(canvas.style.width) || canvas.width || 1);
-    const sx = Math.max(1, Math.min(canvas.width - 2, Math.round((left - 2) * scale * dpr)));
-    const sy = Math.max(1, Math.min(canvas.height - 2, Math.round((top + height / 2) * scale * dpr)));
-    const sx2 = Math.max(1, Math.min(canvas.width - 2, Math.round((left + width + 2) * scale * dpr)));
+    const cssW = parseFloat(canvas.style.width) || canvas.width || 1;
+    const dpr = canvas.width / cssW;
+    const mult = scale * dpr;
+
+    const sx = Math.max(1, Math.min(canvas.width - 2, Math.round((left - 2) * mult)));
+    const sy = Math.max(1, Math.min(canvas.height - 2, Math.round((top + height / 2) * mult)));
+    const sx2 = Math.max(1, Math.min(canvas.width - 2, Math.round((left + width + 2) * mult)));
     const p1 = ctx.getImageData(sx, sy, 1, 1).data;
     const p2 = ctx.getImageData(sx2, sy, 1, 1).data;
-    const r = Math.round((p1[0] + p2[0]) / 2);
-    const g = Math.round((p1[1] + p2[1]) / 2);
-    const b = Math.round((p1[2] + p2[2]) / 2);
-    return `rgb(${r}, ${g}, ${b})`;
+    const bgR = Math.round((p1[0] + p2[0]) / 2);
+    const bgG = Math.round((p1[1] + p2[1]) / 2);
+    const bgB = Math.round((p1[2] + p2[2]) / 2);
+    const bgColor = rgbToHex(bgR, bgG, bgB);
+
+    // Scan interior sample grid to find highest-contrast foreground glyph ink color
+    const xStart = Math.max(0, Math.floor(left * mult));
+    const yStart = Math.max(0, Math.floor(top * mult));
+    const xEnd = Math.min(canvas.width - 1, Math.ceil((left + Math.min(width, 160)) * mult));
+    const yEnd = Math.min(canvas.height - 1, Math.ceil((top + height) * mult));
+    const sampleW = Math.max(1, xEnd - xStart);
+    const sampleH = Math.max(1, yEnd - yStart);
+    const imgData = ctx.getImageData(xStart, yStart, sampleW, sampleH).data;
+
+    let bestDist = 0;
+    let fgR = 15;
+    let fgG = 23;
+    let fgB = 42;
+    const step = Math.max(1, Math.floor((sampleW * sampleH) / 600));
+
+    for (let idx = 0; idx < sampleW * sampleH; idx += step) {
+      const i = idx * 4;
+      const r = imgData[i];
+      const g = imgData[i + 1];
+      const b = imgData[i + 2];
+      const dist = Math.hypot(r - bgR, g - bgG, b - bgB);
+      if (dist > bestDist) {
+        bestDist = dist;
+        fgR = r;
+        fgG = g;
+        fgB = b;
+      }
+    }
+
+    const fgColor = bestDist > 26 ? rgbToHex(fgR, fgG, fgB) : '#0f172a';
+    return { bgColor, fgColor };
   } catch {
-    return '#ffffff';
+    return { bgColor: '#ffffff', fgColor: '#0f172a' };
   }
 }
 
@@ -37,6 +87,7 @@ export default function PdfPageCanvas({
   pdfjsPage,
   metadata,
   zoom,
+  sharpeningLevel = 'ultra',
   activeTool,
   activeShapeType,
   drawSettings,
@@ -57,6 +108,7 @@ export default function PdfPageCanvas({
   const toolRef = useRef(activeTool);
   const shapeTypeRef = useRef(activeShapeType);
   const drawSettingsRef = useRef(drawSettings);
+  const sharpRef = useRef(sharpeningLevel);
   const dragDraftRef = useRef(null);
 
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
@@ -65,6 +117,12 @@ export default function PdfPageCanvas({
   toolRef.current = activeTool;
   shapeTypeRef.current = activeShapeType;
   drawSettingsRef.current = drawSettings;
+  sharpRef.current = sharpeningLevel;
+
+  const sharpPreset = useMemo(
+    () => SHARPENING_PRESETS.find((s) => s.id === sharpeningLevel) || SHARPENING_PRESETS[2],
+    [sharpeningLevel]
+  );
 
   const isRotated90 = (pageSpec.rotationDelta || 0) % 180 !== 0;
   const pageW = isRotated90
@@ -74,7 +132,6 @@ export default function PdfPageCanvas({
     ? (metadata?.width || pageSpec.width || 612)
     : (metadata?.height || pageSpec.height || 792);
 
-  // Transform text/image hitboxes when page has rotationDelta
   const visualMeta = useMemo(() => {
     if (!metadata) return null;
     if (!pageSpec.rotationDelta || !pdfjsPage) return metadata;
@@ -85,7 +142,7 @@ export default function PdfPageCanvas({
     const textBlocks = (metadata.textBlocks || []).map((b) => {
       const pts = (b.rawItems || []).map((ri) => {
         const p = vp.convertToViewportPoint(ri.pdfX, ri.pdfY);
-        return { x: p[0], y: p[1], w: ri.width, h: ri.height, fs: ri.fontSize };
+        return { x: p[0], y: p[1] };
       });
       if (pts.length === 0) return b;
       const first = pts[0];
@@ -129,6 +186,36 @@ export default function PdfPageCanvas({
     });
   };
 
+  const applySharpeningToCanvas = (fc, preset) => {
+    if (!fc) return;
+    const targetDpr = Math.min(3, Math.max(window.devicePixelRatio || 1, preset.scale));
+    fabric.devicePixelRatio = targetDpr;
+    fc.enableRetinaScaling = true;
+    fc.setDimensions({ width: Math.floor(pageW * zoom), height: Math.floor(pageH * zoom) });
+    fc.setZoom(zoom);
+
+    if (fc.contextContainer) {
+      fc.contextContainer.imageSmoothingEnabled = true;
+      fc.contextContainer.imageSmoothingQuality = 'high';
+      try {
+        fc.contextContainer.textRendering = 'geometricPrecision';
+      } catch {
+        // ignore unsupported browsers
+      }
+    }
+
+    fc.getObjects().forEach((obj) => {
+      if (obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'text') {
+        obj.set({
+          objectCaching: !preset.disableCache,
+          noScaleCache: preset.disableCache,
+          dirty: true,
+        });
+      }
+    });
+    fc.renderAll();
+  };
+
   const notifySelection = () => {
     const fc = fabricRef.current;
     if (!fc) return;
@@ -148,6 +235,13 @@ export default function PdfPageCanvas({
         ? 'draw'
         : 'shape');
 
+    const normalizedWeight =
+      obj.fontWeight === 'bold'
+        ? '700'
+        : obj.fontWeight === 'normal' || !obj.fontWeight
+        ? '400'
+        : String(obj.fontWeight);
+
     onSelectObject({
       pageId: pageSpec.id,
       kind,
@@ -158,7 +252,8 @@ export default function PdfPageCanvas({
       nexFontId: obj.nexFontId || 'Helvetica',
       nexFontSubstituted: Boolean(obj.nexFontSubstituted),
       nexOriginalFont: obj.nexOriginalFont || '',
-      fontWeight: obj.fontWeight || 'normal',
+      hasOriginalFormat: Boolean(obj.nexOriginalFormat),
+      fontWeight: normalizedWeight,
       fontStyle: obj.fontStyle || 'normal',
       underline: Boolean(obj.underline),
       fill: obj.fill || '#0f172a',
@@ -184,7 +279,7 @@ export default function PdfPageCanvas({
     if (!baseCanvas) return;
 
     const renderBase = async () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(3, Math.max(window.devicePixelRatio || 1, sharpPreset.scale));
       const cssW = Math.floor(pageW * zoom);
       const cssH = Math.floor(pageH * zoom);
 
@@ -235,11 +330,18 @@ export default function PdfPageCanvas({
         if (visualMeta && removedTxt.size > 0) {
           for (const block of visualMeta.textBlocks || []) {
             if (!removedTxt.has(block.id)) continue;
-            const bg =
-              block.bgSampleColor ||
-              sampleCanvasBgColor(baseCanvas, block.left, block.top, block.width, block.height, zoom);
-            block.bgSampleColor = bg;
-            mCtx.fillStyle = bg;
+            const sampled = block.bgSampleColor
+              ? { bgColor: block.bgSampleColor }
+              : sampleCanvasBgAndFgColor(
+                  baseCanvas,
+                  block.left,
+                  block.top,
+                  block.width,
+                  block.height,
+                  zoom
+                );
+            block.bgSampleColor = sampled.bgColor;
+            mCtx.fillStyle = sampled.bgColor;
             mCtx.fillRect(
               (block.left - 2) * scaleMult,
               (block.top - 2) * scaleMult,
@@ -252,8 +354,15 @@ export default function PdfPageCanvas({
         if (visualMeta && removedImg.size > 0) {
           for (const img of visualMeta.images || []) {
             if (!removedImg.has(img.id)) continue;
-            const bg = sampleCanvasBgColor(baseCanvas, img.left, img.top, img.width, img.height, zoom);
-            mCtx.fillStyle = bg;
+            const { bgColor } = sampleCanvasBgAndFgColor(
+              baseCanvas,
+              img.left,
+              img.top,
+              img.width,
+              img.height,
+              zoom
+            );
+            mCtx.fillStyle = bgColor;
             mCtx.fillRect(
               img.left * scaleMult,
               img.top * scaleMult,
@@ -269,26 +378,43 @@ export default function PdfPageCanvas({
     return () => {
       cancelled = true;
     };
-  }, [pdfjsPage, pageSpec.isBlank, pageSpec.rotationDelta, pageSpec.removedTextIds, pageSpec.removedImageIds, zoom, pageW, pageH, visualMeta]);
+  }, [
+    pdfjsPage,
+    pageSpec.isBlank,
+    pageSpec.rotationDelta,
+    pageSpec.removedTextIds,
+    pageSpec.removedImageIds,
+    zoom,
+    pageW,
+    pageH,
+    visualMeta,
+    sharpPreset,
+  ]);
 
   // 2. Initialize Fabric.js canvas once per page
   useEffect(() => {
     const el = fabricElRef.current;
     if (!el) return;
 
+    const initPreset =
+      SHARPENING_PRESETS.find((s) => s.id === sharpRef.current) || SHARPENING_PRESETS[2];
+    fabric.devicePixelRatio = Math.min(3, Math.max(window.devicePixelRatio || 1, initPreset.scale));
+
     const fc = new fabric.Canvas(el, {
       width: pageW * zoom,
       height: pageH * zoom,
       preserveObjectStacking: true,
+      enableRetinaScaling: true,
       selection: true,
     });
     fc.setZoom(zoom);
     fabricRef.current = fc;
+    applySharpeningToCanvas(fc, initPreset);
 
     if (pageSpec.fabricJson) {
       isInternalSyncRef.current = true;
       fc.loadFromJSON(pageSpec.fabricJson, () => {
-        fc.renderAll();
+        applySharpeningToCanvas(fc, initPreset);
         lastJsonRef.current = JSON.stringify(fc.toJSON(CUSTOM_PROPS));
         isInternalSyncRef.current = false;
       });
@@ -311,6 +437,11 @@ export default function PdfPageCanvas({
 
     const handleTextChanged = () => {
       if (isInternalSyncRef.current) return;
+      const active = fc.getActiveObject();
+      // Preserve object-level font family, size, weight & color if Fabric cleared/reset inline styles
+      if (active && active.styles && Object.keys(active.styles).length > 0) {
+        active.styles = {};
+      }
       notifySelection();
       commitFabricChanges();
     };
@@ -370,17 +501,25 @@ export default function PdfPageCanvas({
       if (opt.target) return;
 
       if (t === 'addText') {
+        const curPreset =
+          SHARPENING_PRESETS.find((s) => s.id === sharpRef.current) || SHARPENING_PRESETS[2];
+        const fontOpt = resolveFontOption(DEFAULT_TEXT_STYLE.nexFontId);
         const tb = new fabric.Textbox('Type text here', {
           left: pointer.x,
           top: pointer.y - 10,
-          width: 210,
-          fontSize: 16,
-          fill: '#0f172a',
-          fontFamily: FONT_OPTIONS[0].cssFamily,
-          nexFontId: 'Helvetica',
+          width: 220,
+          fontSize: DEFAULT_TEXT_STYLE.fontSize,
+          fontWeight: DEFAULT_TEXT_STYLE.fontWeight,
+          fontStyle: DEFAULT_TEXT_STYLE.fontStyle,
+          fill: DEFAULT_TEXT_STYLE.fill,
+          fontFamily: fontOpt.cssFamily,
+          nexFontId: fontOpt.id,
+          nexOriginalFormat: { ...DEFAULT_TEXT_STYLE },
           nexKind: 'text',
-          lineHeight: 1.2,
-          charSpacing: 0,
+          lineHeight: DEFAULT_TEXT_STYLE.lineHeight,
+          charSpacing: DEFAULT_TEXT_STYLE.charSpacing,
+          objectCaching: !curPreset.disableCache,
+          noScaleCache: curPreset.disableCache,
           borderColor: '#22d3ee',
           cornerColor: '#8b5cf6',
           cornerStyle: 'circle',
@@ -397,7 +536,6 @@ export default function PdfPageCanvas({
         return;
       }
 
-      // Drag-to-draw start for highlight, underline, and shapes
       if (t === 'highlight' || t === 'underline' || t === 'shapes') {
         fc.selection = false;
         const st = shapeTypeRef.current;
@@ -543,7 +681,6 @@ export default function PdfPageCanvas({
       const dist = Math.hypot(p.x - draft.startX, p.y - draft.startY);
       let finalObj = draft.obj;
 
-      // Single click fallback -> give a crisp default size
       if (dist < 6) {
         if (draft.tool === 'highlight') {
           finalObj.set({ left: draft.startX, top: draft.startY - 8, width: 150, height: 20 });
@@ -640,29 +777,67 @@ export default function PdfPageCanvas({
         const obj = fc.getActiveObject();
         if (!obj) return;
 
-        if (patch.fontFamilyId) {
-          const fOpt = FONT_OPTIONS.find((f) => f.id === patch.fontFamilyId) || FONT_OPTIONS[0];
-          obj.set({ fontFamily: fOpt.cssFamily, nexFontId: fOpt.id });
-          delete patch.fontFamilyId;
+        const nextPatch = { ...patch };
+
+        if (nextPatch.fontFamilyId) {
+          const fOpt = resolveFontOption(nextPatch.fontFamilyId);
+          nextPatch.fontFamily = fOpt.cssFamily;
+          nextPatch.nexFontId = fOpt.id;
+          delete nextPatch.fontFamilyId;
         }
-        if (typeof patch.targetWidth === 'number') {
-          obj.set({ scaleX: Math.max(8, patch.targetWidth) / (obj.width || 100) });
-          delete patch.targetWidth;
+        if (typeof nextPatch.targetWidth === 'number') {
+          nextPatch.scaleX = Math.max(8, nextPatch.targetWidth) / (obj.width || 100);
+          delete nextPatch.targetWidth;
         }
-        if (typeof patch.targetHeight === 'number') {
-          obj.set({ scaleY: Math.max(8, patch.targetHeight) / (obj.height || 100) });
-          delete patch.targetHeight;
+        if (typeof nextPatch.targetHeight === 'number') {
+          nextPatch.scaleY = Math.max(8, nextPatch.targetHeight) / (obj.height || 100);
+          delete nextPatch.targetHeight;
         }
-        if (typeof patch.fontSize === 'number' && (obj.type === 'textbox' || obj.type === 'i-text')) {
-          obj.set({ fontSize: patch.fontSize, scaleX: 1, scaleY: 1 });
-          delete patch.fontSize;
+        if (typeof nextPatch.fontSize === 'number' && (obj.type === 'textbox' || obj.type === 'i-text')) {
+          const visWidth = Math.max(40, (obj.width || 120) * (obj.scaleX || 1));
+          nextPatch.width = visWidth;
+          nextPatch.scaleX = 1;
+          nextPatch.scaleY = 1;
         }
-        if (typeof patch.lockAspect === 'boolean') {
-          obj.set({ lockUniScaling: patch.lockAspect, nexLockAspect: patch.lockAspect });
-          delete patch.lockAspect;
+        if (typeof nextPatch.lockAspect === 'boolean') {
+          nextPatch.lockUniScaling = nextPatch.lockAspect;
+          nextPatch.nexLockAspect = nextPatch.lockAspect;
+          delete nextPatch.lockAspect;
         }
 
-        obj.set(patch);
+        // Keep formatting consistent across the whole text object when editing
+        if (obj.type === 'textbox' || obj.type === 'i-text') {
+          obj.styles = {};
+          nextPatch.dirty = true;
+        }
+
+        obj.set(nextPatch);
+        obj.setCoords();
+        fc.renderAll();
+        notifySelection();
+        commitFabricChanges();
+      },
+      resetSelectedTextToDefault: () => {
+        const obj = fc.getActiveObject();
+        if (!obj || (obj.type !== 'textbox' && obj.type !== 'i-text' && obj.type !== 'text')) return;
+        const base = obj.nexOriginalFormat || DEFAULT_TEXT_STYLE;
+        const fOpt = resolveFontOption(base.nexFontId);
+        obj.styles = {};
+        obj.set({
+          fontFamily: fOpt.cssFamily,
+          nexFontId: fOpt.id,
+          fontSize: base.fontSize || 16,
+          fontWeight: base.fontWeight || '400',
+          fontStyle: base.fontStyle || 'normal',
+          underline: Boolean(base.underline),
+          fill: base.fill || '#0f172a',
+          textAlign: base.textAlign || 'left',
+          lineHeight: base.lineHeight ?? 1.2,
+          charSpacing: base.charSpacing ?? 0,
+          scaleX: 1,
+          scaleY: 1,
+          dirty: true,
+        });
         obj.setCoords();
         fc.renderAll();
         notifySelection();
@@ -705,14 +880,12 @@ export default function PdfPageCanvas({
     };
   }, [pageSpec.id]);
 
-  // 3. Keep Fabric zoom & dimensions synced
+  // 3. Keep Fabric zoom, dimensions, and sharpening synced
   useEffect(() => {
     const fc = fabricRef.current;
     if (!fc) return;
-    fc.setDimensions({ width: Math.floor(pageW * zoom), height: Math.floor(pageH * zoom) });
-    fc.setZoom(zoom);
-    fc.renderAll();
-  }, [zoom, pageW, pageH]);
+    applySharpeningToCanvas(fc, sharpPreset);
+  }, [zoom, pageW, pageH, sharpPreset]);
 
   // 4. Sync Drawing mode & tool interactivity
   useEffect(() => {
@@ -743,7 +916,7 @@ export default function PdfPageCanvas({
 
     isInternalSyncRef.current = true;
     fc.loadFromJSON(pageSpec.fabricJson || { version: '5.3.0', objects: [] }, () => {
-      fc.renderAll();
+      applySharpeningToCanvas(fc, sharpPreset);
       lastJsonRef.current = incomingStr;
       isInternalSyncRef.current = false;
     });
@@ -754,17 +927,12 @@ export default function PdfPageCanvas({
     const baseCanvas = baseCanvasRef.current;
     if (!fc) return;
 
+    const sampled = baseCanvas
+      ? sampleCanvasBgAndFgColor(baseCanvas, block.left, block.top, block.width, block.height, zoom)
+      : { bgColor: '#ffffff', fgColor: '#0f172a' };
+    block.bgSampleColor = sampled.bgColor;
+
     if (activeTool === 'deleteObject' || activeTool === 'eraser') {
-      if (baseCanvas) {
-        block.bgSampleColor = sampleCanvasBgColor(
-          baseCanvas,
-          block.left,
-          block.top,
-          block.width,
-          block.height,
-          zoom
-        );
-      }
       onCommitPageUpdate(pageSpec.id, {
         removedTextIds: [...(pageSpec.removedTextIds || []), block.id],
       });
@@ -774,33 +942,42 @@ export default function PdfPageCanvas({
 
     if (activeTool !== 'editText' && activeTool !== 'select') return;
 
-    if (baseCanvas) {
-      block.bgSampleColor = sampleCanvasBgColor(
-        baseCanvas,
-        block.left,
-        block.top,
-        block.width,
-        block.height,
-        zoom
-      );
-    }
+    const fontOpt = resolveFontOption(block.fontInfo.mappedFamily);
+    const preservedWeight = block.fontInfo.fontWeight || (block.fontInfo.isBold ? '700' : '400');
+    const preservedStyle = block.fontInfo.isItalic ? 'italic' : 'normal';
+    const preservedSize = block.fontSize || 12;
+    const preservedColor = sampled.fgColor;
 
-    const fontOpt = FONT_OPTIONS.find((f) => f.id === block.fontInfo.mappedFamily) || FONT_OPTIONS[0];
+    const originalFormat = {
+      nexFontId: fontOpt.id,
+      fontSize: preservedSize,
+      fontWeight: preservedWeight,
+      fontStyle: preservedStyle,
+      underline: false,
+      fill: preservedColor,
+      textAlign: 'left',
+      lineHeight: 1.18,
+      charSpacing: 0,
+    };
+
     const tb = new fabric.Textbox(block.text, {
       left: block.left,
       top: block.top,
       width: Math.max(block.width + 24, 90),
-      fontSize: block.fontSize || 12,
+      fontSize: preservedSize,
       fontFamily: fontOpt.cssFamily,
-      fontWeight: block.fontInfo.isBold ? 'bold' : 'normal',
-      fontStyle: block.fontInfo.isItalic ? 'italic' : 'normal',
-      fill: '#0f172a',
+      fontWeight: preservedWeight,
+      fontStyle: preservedStyle,
+      fill: preservedColor,
       nexFontId: fontOpt.id,
       nexFontSubstituted: block.fontInfo.isEmbeddedSubset,
       nexOriginalFont: block.fontInfo.rawFontName,
+      nexOriginalFormat: originalFormat,
       nexKind: 'text',
       lineHeight: 1.18,
       charSpacing: 0,
+      objectCaching: !sharpPreset.disableCache,
+      noScaleCache: sharpPreset.disableCache,
       borderColor: '#22d3ee',
       cornerColor: '#8b5cf6',
       cornerStyle: 'circle',
@@ -823,9 +1000,9 @@ export default function PdfPageCanvas({
 
     if (block.fontInfo.isEmbeddedSubset) {
       onToast(
-        `Embedded font (${block.fontInfo.rawFontName}) detected — using ${fontOpt.id} substitution on export`,
+        `Preserved size (${preservedSize}pt), weight (${preservedWeight}), & color (${preservedColor}). Embedded font "${block.fontInfo.rawFontName}" uses ${fontOpt.id} substitution on export.`,
         'warning',
-        4200
+        4500
       );
     }
   };
@@ -938,7 +1115,7 @@ export default function PdfPageCanvas({
                     title={
                       isDel
                         ? 'Click to delete original PDF text'
-                        : `Click to edit: "${block.text}"`
+                        : `Click to edit (preserves ${block.fontInfo.mappedFamily} ${block.fontSize}pt): "${block.text}"`
                     }
                     style={{
                       left: `${block.left * zoom - 2}px`,

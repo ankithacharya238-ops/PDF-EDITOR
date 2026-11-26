@@ -31,6 +31,7 @@ export default function EditorPage({
   const [docId, setDocId] = useState(initialDocId || null);
   const [docName, setDocName] = useState(initialDocName || 'Document.pdf');
   const [zoom, setZoom] = useState(1.0);
+  const [sharpeningLevel, setSharpeningLevel] = useState('ultra');
   const [activeTool, setActiveTool] = useState('select');
   const [activeShapeType, setActiveShapeType] = useState('rect');
   const [drawSettings, setDrawSettings] = useState({
@@ -223,6 +224,11 @@ export default function EditorPage({
 
   const handleUpdateSelected = (patch) => {
     getSelectedApi()?.updateSelectedObject(patch);
+  };
+
+  const handleResetSelectedText = () => {
+    getSelectedApi()?.resetSelectedTextToDefault();
+    onToast('Text formatting reset to original/default style', 'info');
   };
 
   const handleReplaceSelectedImage = (dataUrl) => {
@@ -435,6 +441,7 @@ export default function EditorPage({
           pdfjsPagesMap={pdfjsPagesMap}
           pageMetadataMap={pageMetadataMap}
           zoom={zoom}
+          sharpeningLevel={sharpeningLevel}
           activeTool={activeTool}
           activeShapeType={activeShapeType}
           drawSettings={drawSettings}
@@ -450,9 +457,15 @@ export default function EditorPage({
         <RightPropertiesPanel
           selectedObject={selectedObject}
           activeTool={activeTool}
+          sharpeningLevel={sharpeningLevel}
+          onChangeSharpeningLevel={(lvl) => {
+            setSharpeningLevel(lvl);
+            onToast(`Font sharpening set to ${lvl.toUpperCase()}`, 'info', 1800);
+          }}
           drawSettings={drawSettings}
           onChangeDrawSettings={(patch) => setDrawSettings((d) => ({ ...d, ...patch }))}
           onUpdateSelected={handleUpdateSelected}
+          onResetSelectedText={handleResetSelectedText}
           onReplaceSelectedImage={handleReplaceSelectedImage}
           onDeleteSelected={handleDeleteSelected}
           onBringForward={() => getSelectedApi()?.bringForward()}
@@ -546,9 +559,15 @@ export default function EditorPage({
                 inDrawer
                 selectedObject={selectedObject}
                 activeTool={activeTool}
+                sharpeningLevel={sharpeningLevel}
+                onChangeSharpeningLevel={(lvl) => {
+                  setSharpeningLevel(lvl);
+                  onToast(`Font sharpening set to ${lvl.toUpperCase()}`, 'info', 1800);
+                }}
                 drawSettings={drawSettings}
                 onChangeDrawSettings={(patch) => setDrawSettings((d) => ({ ...d, ...patch }))}
                 onUpdateSelected={handleUpdateSelected}
+                onResetSelectedText={handleResetSelectedText}
                 onReplaceSelectedImage={handleReplaceSelectedImage}
                 onDeleteSelected={handleDeleteSelected}
                 onBringForward={() => getSelectedApi()?.bringForward()}

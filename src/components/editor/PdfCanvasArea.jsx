@@ -8,6 +8,7 @@ export default function PdfCanvasArea({
   pdfjsPagesMap,
   pageMetadataMap,
   zoom,
+  sharpeningLevel,
   activeTool,
   activeShapeType,
   drawSettings,
@@ -79,6 +80,7 @@ export default function PdfCanvasArea({
               pdfjsPage={pdfjsPage}
               metadata={metadata}
               zoom={zoom}
+              sharpeningLevel={sharpeningLevel}
               activeTool={activeTool}
               activeShapeType={activeShapeType}
               drawSettings={drawSettings}

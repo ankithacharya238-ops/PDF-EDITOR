@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts, degrees, rgb, LineCapStyle } from 'pdf-lib';
-import { FONT_OPTIONS } from '../config/editorConfig.js';
+import { resolveFontOption } from '../config/editorConfig.js';
 import { editPageContentStream } from './pdfStreamEditor.js';
 
 function hexToRgbTuple(hex = '#0f172a') {
@@ -184,7 +184,7 @@ export async function exportEditedPdf({ originalPdfBytes, pagesState, pageMetada
 
   const fontCache = {};
   const getPdfFont = async (fontId = 'Helvetica', isBold = false, isItalic = false) => {
-    const def = FONT_OPTIONS.find((f) => f.id === fontId) || FONT_OPTIONS[0];
+    const def = resolveFontOption(fontId);
     const variant = getFontVariantKey(isBold, isItalic);
     const stdFont = def.pdfStandard[variant] || StandardFonts.Helvetica;
     if (!fontCache[stdFont]) {
