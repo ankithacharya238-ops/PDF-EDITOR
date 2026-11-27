@@ -5,6 +5,7 @@ import {
   AlignJustify,
   AlignLeft,
   AlignRight,
+  ArrowUpToLine,
   Bold,
   Check,
   CheckCircle2,
@@ -27,6 +28,7 @@ export default function TextFormattingToolbar({
   onUndo,
   onRedo,
   onUpdateSelected,
+  onMatchAbove,
   onTransformCase,
   onResetText,
   onApplyErrorFix,
@@ -201,6 +203,15 @@ export default function TextFormattingToolbar({
               <Icon className="w-3.5 h-3.5" />
             </button>
           ))}
+          <button
+            type="button"
+            onClick={onMatchAbove}
+            title="Align selected text to the exact starting position of the line above it"
+            className="inline-flex items-center gap-1 px-2 py-1 ml-0.5 rounded-lg border border-white/10 bg-slate-900/70 text-[11px] font-medium text-slate-200 hover:text-cyan-200 hover:border-cyan-400/50 transition-colors"
+          >
+            <ArrowUpToLine className="w-3 h-3 text-cyan-300" />
+            <span>Match Above</span>
+          </button>
         </div>
 
         <div className="h-4 w-px bg-white/10" />

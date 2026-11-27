@@ -9,6 +9,7 @@ import {
 import { analyzeTextErrors } from '../../utils/textChecker';
 import {
   applyCaseTransform,
+  findNearestAboveLineStart,
   spliceFabricTextPreservingStyles,
 } from '../../utils/textFormatting';
 
@@ -199,6 +200,8 @@ export default function PdfPageCanvas({
   const drawSettingsRef = useRef(drawSettings);
   const sharpRef = useRef(sharpeningLevel);
   const dragDraftRef = useRef(null);
+  const visualMetaRef = useRef(null);
+  const removedTextIdsRef = useRef(pageSpec.removedTextIds || []);
 
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [hoveredImgId, setHoveredImgId] = useState(null);
@@ -262,6 +265,9 @@ export default function PdfPageCanvas({
 
     return { ...metadata, textBlocks, images };
   }, [metadata, pageSpec.rotationDelta, pdfjsPage]);
+
+  visualMetaRef.current = visualMeta;
+  removedTextIdsRef.current = pageSpec.removedTextIds || [];
 
   const commitFabricChanges = (extraPatch = {}) => {
     const fc = fabricRef.current;
@@ -1030,6 +1036,73 @@ export default function PdfPageCanvas({
         fc.renderAll();
         notifySelection();
         commitFabricChanges();
+      },
+      matchAboveAlignment: () => {
+        const obj = fc.getActiveObject();
+        if (!obj || (obj.type !== 'textbox' && obj.type !== 'i-text' && obj.type !== 'text')) {
+          return { matched: false, reason: 'no-text' };
+        }
+
+        // If cursor is on line 2+ inside a multi-line box, check if leading whitespace differs from line above
+        if (obj.isEditing && obj._textLines && obj._textLines.length > 1) {
+          const loc = obj.get2DCursorLocation(obj.selectionStart ?? 0, false);
+          if (loc.lineIndex > 0) {
+            const rawLines = (obj.text || '').split('\n');
+            if (loc.lineIndex < rawLines.length) {
+              const prevIndent = (rawLines[loc.lineIndex - 1].match(/^\s*/) || [''])[0];
+              const curIndent = (rawLines[loc.lineIndex].match(/^\s*/) || [''])[0];
+              if (prevIndent !== curIndent) {
+                let lineStartFlat = 0;
+                for (let k = 0; k < loc.lineIndex; k++) lineStartFlat += rawLines[k].length + 1;
+                spliceFabricTextPreservingStyles(obj, lineStartFlat, lineStartFlat + curIndent.length, prevIndent);
+                obj.setCoords();
+                fc.renderAll();
+                notifySelection();
+                commitFabricChanges();
+                return { matched: true, mode: 'indent', targetLeft: obj.left };
+              }
+            }
+          }
+        }
+
+        // Collect all candidate lines above this text object (existing PDF lines + other Fabric text objects)
+        const candidates = [];
+        const removedSet = new Set(removedTextIdsRef.current || []);
+        const vMeta = visualMetaRef.current;
+        if (vMeta?.textBlocks) {
+          for (const b of vMeta.textBlocks) {
+            if (!removedSet.has(b.id)) {
+              candidates.push({ left: b.left, top: b.top, text: b.text });
+            }
+          }
+        }
+        for (const other of fc.getObjects()) {
+          if (other === obj) continue;
+          if (other.type === 'textbox' || other.type === 'i-text' || other.type === 'text') {
+            const lineOffset =
+              typeof other._getLineLeftOffset === 'function' ? other._getLineLeftOffset(0) : 0;
+            candidates.push({
+              left: (other.left || 0) + Math.max(0, lineOffset),
+              top: other.top || 0,
+              text: other.text || '',
+            });
+          }
+        }
+
+        const match = findNearestAboveLineStart(
+          { left: obj.left || 0, top: obj.top || 0 },
+          candidates
+        );
+        if (!match) {
+          return { matched: false, reason: 'none-above' };
+        }
+
+        obj.set({ left: match.targetLeft, textAlign: 'left', dirty: true });
+        obj.setCoords();
+        fc.renderAll();
+        notifySelection();
+        commitFabricChanges();
+        return { matched: true, mode: 'block', targetLeft: match.targetLeft };
       },
       applyTextErrorFix: (issue, replacement) => {
         const obj = fc.getActiveObject();

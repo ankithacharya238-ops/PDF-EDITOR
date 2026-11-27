@@ -48,6 +48,7 @@ export default function RightPropertiesPanel({
   drawSettings,
   onChangeDrawSettings,
   onUpdateSelected,
+  onMatchAbove,
   onTransformCase,
   onSetTextSelectionRange,
   onApplyErrorFix,
@@ -505,6 +506,16 @@ export default function RightPropertiesPanel({
               ))}
             </div>
           </div>
+
+          <button
+            type="button"
+            onClick={onMatchAbove}
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl bg-slate-900/80 hover:bg-white/10 border border-white/10 hover:border-cyan-400/50 text-xs font-medium text-slate-200 hover:text-cyan-200 transition-colors"
+            title="Align selected text to the exact starting position of the line above it"
+          >
+            <ArrowUpToLine className="w-3.5 h-3.5 text-cyan-300" />
+            Match Above Alignment
+          </button>
 
           {/* Color Picker */}
           <div>

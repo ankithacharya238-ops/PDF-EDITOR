@@ -227,6 +227,15 @@ export default function EditorPage({
     getSelectedApi()?.updateSelectedObject(patch);
   };
 
+  const handleMatchAbove = () => {
+    const res = getSelectedApi()?.matchAboveAlignment?.();
+    if (!res?.matched) {
+      onToast('No line found above the selected text on this page', 'warning', 2200);
+    } else {
+      onToast(`Matched starting alignment to line above (X: ${Math.round(res.targetLeft)}pt)`, 'success', 2000);
+    }
+  };
+
   const handleTransformCase = (mode) => {
     getSelectedApi()?.transformSelectedCase(mode);
     onToast(`Converted text to ${mode === 'upper' ? 'UPPERCASE' : mode === 'lower' ? 'lowercase' : 'Title Case'}`, 'info', 1600);
@@ -472,6 +481,7 @@ export default function EditorPage({
           onUndo={undo}
           onRedo={redo}
           onUpdateSelected={handleUpdateSelected}
+          onMatchAbove={handleMatchAbove}
           onTransformCase={handleTransformCase}
           onResetSelectedText={handleResetSelectedText}
           onApplyErrorFix={handleApplyErrorFix}
@@ -500,6 +510,7 @@ export default function EditorPage({
           drawSettings={drawSettings}
           onChangeDrawSettings={(patch) => setDrawSettings((d) => ({ ...d, ...patch }))}
           onUpdateSelected={handleUpdateSelected}
+          onMatchAbove={handleMatchAbove}
           onTransformCase={handleTransformCase}
           onSetTextSelectionRange={handleSetTextSelectionRange}
           onApplyErrorFix={handleApplyErrorFix}
@@ -606,6 +617,7 @@ export default function EditorPage({
                 drawSettings={drawSettings}
                 onChangeDrawSettings={(patch) => setDrawSettings((d) => ({ ...d, ...patch }))}
                 onUpdateSelected={handleUpdateSelected}
+                onMatchAbove={handleMatchAbove}
                 onTransformCase={handleTransformCase}
                 onSetTextSelectionRange={handleSetTextSelectionRange}
                 onApplyErrorFix={handleApplyErrorFix}

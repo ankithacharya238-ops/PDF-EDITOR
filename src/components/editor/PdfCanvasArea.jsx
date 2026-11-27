@@ -20,6 +20,7 @@ export default function PdfCanvasArea({
   onUndo,
   onRedo,
   onUpdateSelected,
+  onMatchAbove,
   onTransformCase,
   onResetSelectedText,
   onApplyErrorFix,
@@ -80,6 +81,7 @@ export default function PdfCanvasArea({
           onUndo={onUndo}
           onRedo={onRedo}
           onUpdateSelected={onUpdateSelected}
+          onMatchAbove={onMatchAbove}
           onTransformCase={onTransformCase}
           onResetText={onResetSelectedText}
           onApplyErrorFix={onApplyErrorFix}

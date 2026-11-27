@@ -4,7 +4,11 @@ import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { TEXT_HIGHLIGHT_SWATCHES, resolveFontOption } from '../src/config/editorConfig.js';
 import { analyzeTextErrors } from '../src/utils/textChecker.js';
-import { applyCaseTransform, spliceFabricTextPreservingStyles } from '../src/utils/textFormatting.js';
+import {
+  applyCaseTransform,
+  findNearestAboveLineStart,
+  spliceFabricTextPreservingStyles,
+} from '../src/utils/textFormatting.js';
 import { exportEditedPdf } from '../src/pdf/pdfExporter.js';
 
 fabric.Textbox.prototype.getMeasuringContext = function () {
@@ -133,7 +137,36 @@ async function runTextEditingTests() {
   const extracted = tc.items.map((i) => i.str).join(' ');
   assert.ok(extracted.includes('Hello') && extracted.includes('receive') && extracted.includes('WORLD'));
 
-  console.log('All advanced text-editing tests (alignment, selective formatting, capitalization, highlighting, spell/grammar detection, PDF export) passed!');
+  console.log('5. Testing Match Above alignment helper...');
+  // Single column above
+  const m1 = findNearestAboveLineStart(
+    { left: 145, top: 210 },
+    [
+      { left: 48, top: 100, text: 'Header line' },
+      { left: 64.5, top: 185, text: 'Line directly above' },
+      { left: 90, top: 260, text: 'Line below (ignored)' },
+    ]
+  );
+  assert.equal(m1?.targetLeft, 64.5, 'Must snap to nearest line above');
+
+  // Multi-column row tie-breaker: picks closest horizontal column on the nearest above row
+  const m2 = findNearestAboveLineStart(
+    { left: 380, top: 240 },
+    [
+      { left: 50, top: 205, text: 'Left column above' },
+      { left: 352, top: 208, text: 'Right column above' },
+    ]
+  );
+  assert.equal(m2?.targetLeft, 352, 'Must pick closest column on nearest above row');
+
+  // No line above
+  const m3 = findNearestAboveLineStart(
+    { left: 80, top: 50 },
+    [{ left: 100, top: 120, text: 'Below only' }]
+  );
+  assert.equal(m3, null, 'Must return null when no line exists above');
+
+  console.log('All advanced text-editing tests (alignment, Match Above, selective formatting, capitalization, highlighting, spell/grammar detection, PDF export) passed!');
 }
 
 runTextEditingTests().catch((err) => {

@@ -69,3 +69,33 @@ export function spliceFabricTextPreservingStyles(obj, start, end, replacement) {
   obj.styles = rebuiltStyles;
   obj.set({ text: newText, dirty: true });
 }
+
+/**
+ * Finds the nearest text line strictly above `selectedBox` and returns its exact starting X (`left`).
+ * If multiple lines share roughly the same vertical row (e.g. multi-column layout),
+ * selects the column closest horizontally to `selectedBox.left`.
+ */
+export function findNearestAboveLineStart(selectedBox, candidates = []) {
+  if (!selectedBox || !Array.isArray(candidates) || candidates.length === 0) return null;
+
+  const selTop = selectedBox.top ?? 0;
+  const selLeft = selectedBox.left ?? 0;
+
+  const above = candidates.filter((c) => c && typeof c.top === 'number' && typeof c.left === 'number' && c.top < selTop - 1.5);
+  if (above.length === 0) return null;
+
+  above.sort((a, b) => (selTop - a.top) - (selTop - b.top));
+  const closestDistY = selTop - above[0].top;
+
+  // Group candidates on the same visual row (within 8pt vertically) and pick closest horizontally
+  const sameRow = above.filter((c) => Math.abs((selTop - c.top) - closestDistY) <= 8);
+  sameRow.sort((a, b) => Math.abs(a.left - selLeft) - Math.abs(b.left - selLeft));
+
+  const best = sameRow[0];
+  return {
+    targetLeft: Math.round(best.left * 100) / 100,
+    sourceTop: best.top,
+    sourceText: best.text || '',
+  };
+}
+
