@@ -50,10 +50,12 @@ function sampleCanvasBgAndFgColor(canvas, left, top, width, height, scale) {
       ctx.getImageData(sx, syBot, 1, 1).data,
       ctx.getImageData(sx2, syBot, 1, 1).data,
     ];
+    // Prefer neutral near-white paper corner if present so adjacent yellow/colored borders never tint bgColor
+    const whiteCorner = samples.find((s) => s[0] >= 240 && s[1] >= 240 && s[2] >= 240);
     const median = (idx) => samples.map((s) => s[idx]).sort((a, b) => a - b)[1];
-    const bgR = median(0);
-    const bgG = median(1);
-    const bgB = median(2);
+    const bgR = whiteCorner ? whiteCorner[0] : median(0);
+    const bgG = whiteCorner ? whiteCorner[1] : median(1);
+    const bgB = whiteCorner ? whiteCorner[2] : median(2);
     const bgColor = rgbToHex(bgR, bgG, bgB);
 
     const xStart = Math.max(0, Math.floor(left * mult));

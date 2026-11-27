@@ -184,6 +184,14 @@ function tokenizeContentStream(src) {
       start,
       end: i,
     });
+
+    // Skip inline image binary payload between ID and EI
+    if (!isNum && word === 'ID') {
+      const eiMatch = src.slice(i).search(/\sEI(?:\s|$)/);
+      if (eiMatch !== -1) {
+        i = i + eiMatch + 3;
+      }
+    }
   }
 
   return tokens;

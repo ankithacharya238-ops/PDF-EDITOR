@@ -155,8 +155,6 @@ function buildCharStyleLookup(obj) {
         ? st.textBackgroundColor
         : obj.nexHighlightApplied === true && st.textBackgroundColor === undefined
         ? obj.textBackgroundColor
-        : st.textBackgroundColor && obj.nexHighlightApplied !== false
-        ? st.textBackgroundColor
         : '';
 
     return {

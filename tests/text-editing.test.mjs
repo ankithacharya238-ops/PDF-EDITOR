@@ -44,6 +44,7 @@ async function runTextEditingTests() {
       fontFamily: courier.cssFamily,
       nexFontId: courier.id,
       textBackgroundColor: TEXT_HIGHLIGHT_SWATCHES[0].color,
+      nexHighlightApplied: true,
     },
     14,
     19
@@ -185,7 +186,8 @@ async function runTextEditingTests() {
     return streams.map((s) => Buffer.from(decodePDFRawStream(s).decode()).toString('latin1')).join('\n');
   };
 
-  // Page 1: edited text with transparent rgba background & nexHighlightApplied: false (must draw ZERO highlights!)
+  // Page 1: edited text with accidental stray textBackgroundColor (WITHOUT nexHighlightApplied: true)
+  // plus intentional red underline/pen markings — must export ZERO yellow highlights while preserving red markings!
   // Page 2: intentional highlight on one word only
   const { bytes: multiExportBytes } = await exportEditedPdf({
     originalPdfBytes: multiBaseBytes,
@@ -212,10 +214,22 @@ async function runTextEditingTests() {
               scaleX: 1,
               scaleY: 1,
               fill: '#0f172a',
-              textBackgroundColor: 'rgba(255, 255, 0, 0)',
+              textBackgroundColor: '#fef08a',
               nexHighlightApplied: false,
               nexFontId: 'Helvetica',
-              styles: [{ start: 0, end: 5, style: { fontWeight: '700', textBackgroundColor: 'transparent' } }],
+              styles: [{ start: 0, end: 5, style: { fontWeight: '700', textBackgroundColor: '#fef08a' } }],
+            },
+            {
+              type: 'line',
+              left: 60,
+              top: 102,
+              width: 140,
+              height: 0,
+              scaleX: 1,
+              scaleY: 1,
+              stroke: '#ef4444',
+              strokeWidth: 2.5,
+              nexKind: 'underline',
             },
           ],
         },
@@ -258,7 +272,8 @@ async function runTextEditingTests() {
   const reloadedMulti = await PDFDocument.load(multiExportBytes);
   const streamP1 = decodePageStream(reloadedMulti.getPage(0));
   const streamP2 = decodePageStream(reloadedMulti.getPage(1));
-  assert.ok(!/\bh\s+f\b/.test(streamP1) && !streamP1.includes('0.996'), 'Page 1 without highlights must NOT contain any filled highlight rectangle operators');
+  assert.ok(!/\bh\s+f\b/.test(streamP1) && !streamP1.includes('0.996'), 'Page 1 without intentional highlights must NOT contain any yellow highlight rectangles');
+  assert.ok(/0\.937\d*\s+0\.266\d*\s+0\.266\d*\s+RG/.test(streamP1), 'Page 1 intentional red underline marking MUST be preserved');
   assert.ok(/\bh\s+f\b/.test(streamP2) && streamP2.includes('0.996'), 'Page 2 with intentional highlight MUST contain the yellow highlight rectangle');
 
   console.log('All advanced text-editing tests (alignment, Match Above, selective formatting, capitalization, highlighting, spell/grammar detection, PDF export) passed!');
