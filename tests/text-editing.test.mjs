@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { fabric } from 'fabric';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFArray, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { TEXT_HIGHLIGHT_SWATCHES, resolveFontOption } from '../src/config/editorConfig.js';
 import { analyzeTextErrors } from '../src/utils/textChecker.js';
@@ -165,6 +165,101 @@ async function runTextEditingTests() {
     [{ left: 100, top: 120, text: 'Below only' }]
   );
   assert.equal(m3, null, 'Must return null when no line exists above');
+
+  console.log('6. Testing multi-page export has NO unwanted yellow highlights when unhighlighted...');
+  const multiDoc = await PDFDocument.create();
+  multiDoc.addPage([612, 792]);
+  multiDoc.addPage([612, 792]);
+  const multiBaseBytes = await multiDoc.save();
+
+  const decodePageStream = (page) => {
+    const contents = page.node.Contents();
+    const streams = [];
+    if (contents instanceof PDFRawStream) streams.push(contents);
+    else if (contents instanceof PDFArray) {
+      for (let i = 0; i < contents.size(); i++) {
+        const s = contents.lookup(i);
+        if (s instanceof PDFRawStream) streams.push(s);
+      }
+    }
+    return streams.map((s) => Buffer.from(decodePDFRawStream(s).decode()).toString('latin1')).join('\n');
+  };
+
+  // Page 1: edited text with transparent rgba background & nexHighlightApplied: false (must draw ZERO highlights!)
+  // Page 2: intentional highlight on one word only
+  const { bytes: multiExportBytes } = await exportEditedPdf({
+    originalPdfBytes: multiBaseBytes,
+    pagesState: [
+      {
+        id: 'mp-1',
+        isBlank: false,
+        sourcePageIndex: 0,
+        width: 612,
+        height: 792,
+        rotationDelta: 0,
+        removedTextIds: [],
+        removedImageIds: [],
+        fabricJson: {
+          version: '5.3.0',
+          objects: [
+            {
+              type: 'textbox',
+              text: 'Clean unhighlighted paragraph text',
+              left: 60,
+              top: 80,
+              width: 260,
+              fontSize: 14,
+              scaleX: 1,
+              scaleY: 1,
+              fill: '#0f172a',
+              textBackgroundColor: 'rgba(255, 255, 0, 0)',
+              nexHighlightApplied: false,
+              nexFontId: 'Helvetica',
+              styles: [{ start: 0, end: 5, style: { fontWeight: '700', textBackgroundColor: 'transparent' } }],
+            },
+          ],
+        },
+      },
+      {
+        id: 'mp-2',
+        isBlank: false,
+        sourcePageIndex: 1,
+        width: 612,
+        height: 792,
+        rotationDelta: 0,
+        removedTextIds: [],
+        removedImageIds: [],
+        fabricJson: {
+          version: '5.3.0',
+          objects: [
+            {
+              type: 'textbox',
+              text: 'Only highlighted word gets yellow',
+              left: 60,
+              top: 80,
+              width: 260,
+              fontSize: 14,
+              scaleX: 1,
+              scaleY: 1,
+              fill: '#0f172a',
+              nexFontId: 'Helvetica',
+              styles: [{ start: 5, end: 16, style: { textBackgroundColor: '#fef08a', nexHighlightApplied: true } }],
+            },
+          ],
+        },
+      },
+    ],
+    pageMetadataMap: {
+      0: { width: 612, height: 792, textBlocks: [], images: [] },
+      1: { width: 612, height: 792, textBlocks: [], images: [] },
+    },
+  });
+
+  const reloadedMulti = await PDFDocument.load(multiExportBytes);
+  const streamP1 = decodePageStream(reloadedMulti.getPage(0));
+  const streamP2 = decodePageStream(reloadedMulti.getPage(1));
+  assert.ok(!/\bh\s+f\b/.test(streamP1) && !streamP1.includes('0.996'), 'Page 1 without highlights must NOT contain any filled highlight rectangle operators');
+  assert.ok(/\bh\s+f\b/.test(streamP2) && streamP2.includes('0.996'), 'Page 2 with intentional highlight MUST contain the yellow highlight rectangle');
 
   console.log('All advanced text-editing tests (alignment, Match Above, selective formatting, capitalization, highlighting, spell/grammar detection, PDF export) passed!');
 }

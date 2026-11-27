@@ -19,6 +19,7 @@ const CUSTOM_PROPS = [
   'nexOriginalFont',
   'nexOriginalFormat',
   'nexIgnoredErrors',
+  'nexHighlightApplied',
   'nexKind',
   'nexShapeType',
   'nexLockAspect',
@@ -39,13 +40,20 @@ function sampleCanvasBgAndFgColor(canvas, left, top, width, height, scale) {
     const mult = scale * dpr;
 
     const sx = Math.max(1, Math.min(canvas.width - 2, Math.round((left - 2) * mult)));
-    const sy = Math.max(1, Math.min(canvas.height - 2, Math.round((top + height / 2) * mult)));
+    const syTop = Math.max(1, Math.min(canvas.height - 2, Math.round((top - 2) * mult)));
+    const syBot = Math.max(1, Math.min(canvas.height - 2, Math.round((top + height + 2) * mult)));
     const sx2 = Math.max(1, Math.min(canvas.width - 2, Math.round((left + width + 2) * mult)));
-    const p1 = ctx.getImageData(sx, sy, 1, 1).data;
-    const p2 = ctx.getImageData(sx2, sy, 1, 1).data;
-    const bgR = Math.round((p1[0] + p2[0]) / 2);
-    const bgG = Math.round((p1[1] + p2[1]) / 2);
-    const bgB = Math.round((p1[2] + p2[2]) / 2);
+
+    const samples = [
+      ctx.getImageData(sx, syTop, 1, 1).data,
+      ctx.getImageData(sx2, syTop, 1, 1).data,
+      ctx.getImageData(sx, syBot, 1, 1).data,
+      ctx.getImageData(sx2, syBot, 1, 1).data,
+    ];
+    const median = (idx) => samples.map((s) => s[idx]).sort((a, b) => a - b)[1];
+    const bgR = median(0);
+    const bgG = median(1);
+    const bgB = median(2);
     const bgColor = rgbToHex(bgR, bgG, bgB);
 
     const xStart = Math.max(0, Math.floor(left * mult));
@@ -813,12 +821,22 @@ export default function PdfPageCanvas({
       const dist = Math.hypot(p.x - draft.startX, p.y - draft.startY);
       let finalObj = draft.obj;
 
-      if (dist < 6) {
-        if (draft.tool === 'highlight') {
-          finalObj.set({ left: draft.startX, top: draft.startY - 8, width: 150, height: 20 });
-        } else if (draft.tool === 'underline') {
-          finalObj.set({ x1: draft.startX, y1: draft.startY, x2: draft.startX + 160, y2: draft.startY });
-        } else if (draft.shapeType === 'line') {
+      if (dist < 8) {
+        // Prevent accidental single clicks in Highlight/Underline mode from dropping unwanted yellow boxes
+        if (draft.tool === 'highlight' || draft.tool === 'underline') {
+          fc.remove(finalObj);
+          fc.selection = true;
+          fc.renderAll();
+          onToast(
+            draft.tool === 'highlight'
+              ? 'Drag across text to create a highlight box'
+              : 'Drag across text to draw an underline',
+            'info',
+            2000
+          );
+          return;
+        }
+        if (draft.shapeType === 'line') {
           finalObj.set({ x1: draft.startX, y1: draft.startY, x2: draft.startX + 140, y2: draft.startY });
         } else if (draft.shapeType === 'arrow') {
           fc.remove(finalObj);
@@ -839,7 +857,7 @@ export default function PdfPageCanvas({
       fc.renderAll();
       notifySelection();
       commitFabricChanges();
-      if (draft.tool === 'shapes') {
+      if (draft.tool === 'shapes' || draft.tool === 'highlight' || draft.tool === 'underline') {
         onSelectTool?.('select');
       }
     };
@@ -965,6 +983,7 @@ export default function PdfPageCanvas({
           'underline',
           'fill',
           'textBackgroundColor',
+          'nexHighlightApplied',
         ];
         const selectivePatch = {};
         for (const k of charStyleKeys) {
@@ -972,10 +991,12 @@ export default function PdfPageCanvas({
             selectivePatch[k] = nextPatch[k];
           }
         }
+        if (selectivePatch.textBackgroundColor !== undefined) {
+          selectivePatch.nexHighlightApplied = Boolean(selectivePatch.textBackgroundColor);
+        }
 
         if (selRange && Object.keys(selectivePatch).length > 0 && nextPatch.text === undefined) {
           obj.setSelectionStyles(selectivePatch, selRange.start, selRange.end);
-          // Also apply non-char keys (like textAlign or lineHeight) at block level if present
           for (const k of charStyleKeys) delete nextPatch[k];
           if (Object.keys(nextPatch).length > 0) {
             obj.set(nextPatch);
@@ -988,15 +1009,20 @@ export default function PdfPageCanvas({
           return;
         }
 
-        // Whole-block update: preserve unrelated selective styles while updating edited keys
         if (isTextObj) {
+          if (nextPatch.textBackgroundColor !== undefined) {
+            nextPatch.nexHighlightApplied = Boolean(nextPatch.textBackgroundColor);
+          }
+          // Ensure non-highlight text never inherits accidental backgroundColor CSS
+          if (nextPatch.backgroundColor === undefined && obj.backgroundColor) {
+            nextPatch.backgroundColor = '';
+          }
           if (typeof nextPatch.fontSize === 'number') {
             const visWidth = Math.max(40, (obj.width || 120) * (obj.scaleX || 1));
             nextPatch.width = visWidth;
             nextPatch.scaleX = 1;
             nextPatch.scaleY = 1;
           }
-          // If updating a specific property across whole block, clear only that property's per-char override
           if (obj.styles && nextPatch.text === undefined) {
             const keysToClear = Object.keys(selectivePatch);
             if (keysToClear.length > 0) {
@@ -1177,6 +1203,10 @@ export default function PdfPageCanvas({
         commitFabricChanges();
       },
       clearSelection: () => {
+        const active = fc.getActiveObject();
+        if (active && active.isEditing && typeof active.exitEditing === 'function') {
+          active.exitEditing();
+        }
         fc.discardActiveObject();
         fc.renderAll();
       },

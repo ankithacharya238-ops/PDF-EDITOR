@@ -3,11 +3,17 @@ import { resolveFontOption } from '../config/editorConfig.js';
 import { editPageContentStream } from './pdfStreamEditor.js';
 
 function hexToRgbTuple(hex = '#0f172a') {
-  if (!hex || hex === 'transparent') return null;
-  let clean = hex.trim();
+  if (!hex || typeof hex !== 'string') return null;
+  let clean = hex.trim().toLowerCase();
+  if (!clean || clean === 'transparent' || clean === 'none' || clean === 'inherit' || clean === 'initial' || clean === 'unset') {
+    return null;
+  }
   if (clean.startsWith('rgb')) {
     const nums = clean.match(/[\d.]+/g);
     if (nums && nums.length >= 3) {
+      if (nums.length >= 4 && parseFloat(nums[3]) <= 0.01) {
+        return null;
+      }
       return rgb(
         Math.min(1, parseFloat(nums[0]) / 255),
         Math.min(1, parseFloat(nums[1]) / 255),
@@ -22,11 +28,23 @@ function hexToRgbTuple(hex = '#0f172a') {
       .map((c) => c + c)
       .join('');
   }
-  if (clean.length !== 6) return rgb(0.06, 0.09, 0.16);
+  if (clean.length === 8) {
+    // RRGGBBAA hex with 00 alpha is transparent
+    if (parseInt(clean.slice(6, 8), 16) <= 2) return null;
+    clean = clean.slice(0, 6);
+  }
+  if (!/^[0-9a-f]{6}$/.test(clean)) return null;
   const r = parseInt(clean.slice(0, 2), 16) / 255;
   const g = parseInt(clean.slice(2, 4), 16) / 255;
   const b = parseInt(clean.slice(4, 6), 16) / 255;
   return rgb(r, g, b);
+}
+
+function sanitizeHighlightColor(color) {
+  if (!color || typeof color !== 'string') return '';
+  const trimmed = color.trim();
+  if (!hexToRgbTuple(trimmed)) return '';
+  return trimmed;
 }
 
 async function dataUrlToBytesAndMime(dataUrl) {
@@ -130,6 +148,17 @@ function buildCharStyleLookup(obj) {
     const isItalic = fontStyle === 'italic';
     const fontId = st.nexFontId || (st.fontFamily ? resolveFontOption(st.fontFamily).id : obj.nexFontId || 'Helvetica');
 
+    const rawHighlight =
+      st.nexHighlightApplied === false
+        ? ''
+        : st.nexHighlightApplied === true
+        ? st.textBackgroundColor
+        : obj.nexHighlightApplied === true && st.textBackgroundColor === undefined
+        ? obj.textBackgroundColor
+        : st.textBackgroundColor && obj.nexHighlightApplied !== false
+        ? st.textBackgroundColor
+        : '';
+
     return {
       fontId,
       fontSize: rawSize * scaleY,
@@ -137,7 +166,7 @@ function buildCharStyleLookup(obj) {
       isItalic,
       underline: Boolean(st.underline !== undefined ? st.underline : obj.underline),
       fill: st.fill || obj.fill || '#0f172a',
-      textBackgroundColor: st.textBackgroundColor ?? obj.textBackgroundColor ?? '',
+      textBackgroundColor: sanitizeHighlightColor(rawHighlight),
     };
   };
 }
@@ -322,7 +351,7 @@ export async function exportEditedPdf({ originalPdfBytes, pagesState, pageMetada
       for (const block of meta.textBlocks || []) {
         if (removedTextIds.has(block.id)) {
           for (let r = 0; r < block.rawItems.length; r++) {
-            removedRawItems.push({ ...block.rawItems[r], _uid: `${block.id}-${r}` });
+            removedRawItems.push({ ...block.rawItems[r], _blockId: block.id, _uid: `${block.id}-${r}` });
           }
         }
       }
@@ -338,7 +367,7 @@ export async function exportEditedPdf({ originalPdfBytes, pagesState, pageMetada
 
       for (const fallbackText of streamRes.unmatchedTextItems) {
         stats.fallbackMaskedItems++;
-        const block = meta.textBlocks.find((b) => fallbackText._uid.startsWith(b.id));
+        const block = meta.textBlocks.find((b) => b.id === fallbackText._blockId);
         const bgColor = hexToRgbTuple(block?.bgSampleColor || '#ffffff') || rgb(1, 1, 1);
         outPage.drawRectangle({
           x: Math.max(0, fallbackText.pdfX - 1),

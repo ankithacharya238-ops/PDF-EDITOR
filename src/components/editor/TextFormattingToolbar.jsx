@@ -266,7 +266,7 @@ export default function TextFormattingToolbar({
                     type="button"
                     title={sw.label}
                     onClick={() => {
-                      onUpdateSelected({ textBackgroundColor: sw.color });
+                      onUpdateSelected({ textBackgroundColor: sw.color, nexHighlightApplied: true });
                       setHighlightOpen(false);
                     }}
                     style={{ backgroundColor: sw.color }}
@@ -277,7 +277,7 @@ export default function TextFormattingToolbar({
               <button
                 type="button"
                 onClick={() => {
-                  onUpdateSelected({ textBackgroundColor: '' });
+                  onUpdateSelected({ textBackgroundColor: '', nexHighlightApplied: false });
                   setHighlightOpen(false);
                 }}
                 className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-white/5 hover:bg-rose-500/20 border border-white/10 text-[11px] text-slate-200 hover:text-rose-200 transition-colors"

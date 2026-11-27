@@ -556,7 +556,7 @@ export default function RightPropertiesPanel({
               </label>
               <button
                 type="button"
-                onClick={() => onUpdateSelected({ textBackgroundColor: '' })}
+                onClick={() => onUpdateSelected({ textBackgroundColor: '', nexHighlightApplied: false })}
                 className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-rose-300"
               >
                 <Eraser className="w-3 h-3" /> Clear
@@ -568,7 +568,7 @@ export default function RightPropertiesPanel({
                   key={sw.color}
                   type="button"
                   title={sw.label}
-                  onClick={() => onUpdateSelected({ textBackgroundColor: sw.color })}
+                  onClick={() => onUpdateSelected({ textBackgroundColor: sw.color, nexHighlightApplied: true })}
                   style={{ backgroundColor: sw.color }}
                   className={`w-6 h-6 rounded-full border transition-transform ${
                     displayHighlight === sw.color ? 'border-cyan-400 scale-110' : 'border-white/30'

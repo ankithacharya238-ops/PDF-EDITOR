@@ -338,8 +338,8 @@ export function editPageContentStream(pdfDoc, page, { removedRawTextItems = [], 
         decodedPieces = operandStack[operandStack.length - 1].decoded || '';
       }
 
-      // Check against any target removedRawTextItems
-      const hit = removedRawTextItems.find((item) => {
+      // Check against any target removedRawTextItems (match all items covered by this Tj/TJ operator)
+      const hits = removedRawTextItems.filter((item) => {
         const dx = Math.abs(curX - item.pdfX);
         const dy = Math.abs(curY - item.pdfY);
         const coordClose = dx <= Math.max(10, item.pdfWidth * 0.25) && dy <= Math.max(5, item.pdfFontSize * 0.45);
@@ -347,11 +347,18 @@ export function editPageContentStream(pdfDoc, page, { removedRawTextItems = [], 
           decodedPieces &&
           item.str &&
           (decodedPieces.includes(item.str.trim()) || item.str.trim().includes(decodedPieces.trim()));
-        return (coordClose && (textClose || !decodedPieces)) || (dy <= 3 && dx <= 8);
+        const insideTjRun =
+          op === 'TJ' &&
+          dy <= Math.max(5, item.pdfFontSize * 0.45) &&
+          item.pdfX >= curX - 6 &&
+          decodedPieces &&
+          item.str &&
+          decodedPieces.includes(item.str.trim());
+        return (coordClose && (textClose || !decodedPieces)) || (dy <= 3 && dx <= 8) || insideTjRun;
       });
 
-      if (hit) {
-        matchedTextIds.add(hit._uid);
+      if (hits.length > 0) {
+        hits.forEach((h) => matchedTextIds.add(h._uid));
         // Preserve leading advance if ' or "
         const replacement = op === "'" || op === '"' ? ' T* ' : ' ';
         removals.push({ start: opStart, end: tok.end, replacement });

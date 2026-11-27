@@ -346,6 +346,9 @@ export default function EditorPage({
   const handleExportPdf = async () => {
     setIsExporting(true);
     try {
+      // Exit any active text editing/browser selection state before exporting
+      Object.values(pageApisRef.current).forEach((api) => api?.clearSelection?.());
+
       const { bytes, stats } = await exportEditedPdf({
         originalPdfBytes: pdfBytes,
         pagesState,
