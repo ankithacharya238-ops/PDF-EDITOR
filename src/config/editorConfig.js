@@ -377,6 +377,15 @@ export const HIGHLIGHT_COLORS = [
   '#a78bfa',
 ];
 
+export const TEXT_HIGHLIGHT_SWATCHES = [
+  { color: '#fef08a', label: 'Soft Yellow' },
+  { color: '#a5f3fc', label: 'Electric Cyan' },
+  { color: '#bbf7d0', label: 'Mint Green' },
+  { color: '#fbcfe8', label: 'Rose Pink' },
+  { color: '#ddd6fe', label: 'Lavender' },
+  { color: '#fed7aa', label: 'Warm Amber' },
+];
+
 export const ZOOM_PRESETS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5];
 
 export const KEYBOARD_SHORTCUTS = [

@@ -48,6 +48,7 @@ export default function EditorPage({
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [mobilePropsOpen, setMobilePropsOpen] = useState(false);
   const [mobilePagesOpen, setMobilePagesOpen] = useState(false);
+  const [activeErrorPopup, setActiveErrorPopup] = useState(null);
   const [isExporting, setIsExporting] = useState(false);
 
   const pageApisRef = useRef({});
@@ -224,6 +225,25 @@ export default function EditorPage({
 
   const handleUpdateSelected = (patch) => {
     getSelectedApi()?.updateSelectedObject(patch);
+  };
+
+  const handleTransformCase = (mode) => {
+    getSelectedApi()?.transformSelectedCase(mode);
+    onToast(`Converted text to ${mode === 'upper' ? 'UPPERCASE' : mode === 'lower' ? 'lowercase' : 'Title Case'}`, 'info', 1600);
+  };
+
+  const handleSetTextSelectionRange = (start, end) => {
+    getSelectedApi()?.setTextSelectionRange(start, end);
+  };
+
+  const handleApplyErrorFix = (issue, replacement) => {
+    getSelectedApi()?.applyTextErrorFix(issue, replacement);
+    onToast(`Applied fix: "${replacement}"`, 'success', 1800);
+  };
+
+  const handleIgnoreError = (issueKey) => {
+    getSelectedApi()?.ignoreTextError(issueKey);
+    onToast('Error ignored', 'info', 1400);
   };
 
   const handleResetSelectedText = () => {
@@ -446,10 +466,25 @@ export default function EditorPage({
           activeShapeType={activeShapeType}
           drawSettings={drawSettings}
           activePageId={activePage?.id}
+          selectedObject={selectedObject}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={undo}
+          onRedo={redo}
+          onUpdateSelected={handleUpdateSelected}
+          onTransformCase={handleTransformCase}
+          onResetSelectedText={handleResetSelectedText}
+          onApplyErrorFix={handleApplyErrorFix}
+          onIgnoreError={handleIgnoreError}
+          activeErrorPopup={activeErrorPopup}
+          onClickTextError={setActiveErrorPopup}
           onFocusPage={setActivePageId}
           onSelectTool={setActiveTool}
           onCommitPageUpdate={handleCommitPageUpdate}
-          onSelectObject={setSelectedObject}
+          onSelectObject={(obj) => {
+            setSelectedObject(obj);
+            if (!obj) setActiveErrorPopup(null);
+          }}
           registerPageApi={registerPageApi}
           onToast={onToast}
         />
@@ -465,6 +500,10 @@ export default function EditorPage({
           drawSettings={drawSettings}
           onChangeDrawSettings={(patch) => setDrawSettings((d) => ({ ...d, ...patch }))}
           onUpdateSelected={handleUpdateSelected}
+          onTransformCase={handleTransformCase}
+          onSetTextSelectionRange={handleSetTextSelectionRange}
+          onApplyErrorFix={handleApplyErrorFix}
+          onIgnoreError={handleIgnoreError}
           onResetSelectedText={handleResetSelectedText}
           onReplaceSelectedImage={handleReplaceSelectedImage}
           onDeleteSelected={handleDeleteSelected}
@@ -567,6 +606,10 @@ export default function EditorPage({
                 drawSettings={drawSettings}
                 onChangeDrawSettings={(patch) => setDrawSettings((d) => ({ ...d, ...patch }))}
                 onUpdateSelected={handleUpdateSelected}
+                onTransformCase={handleTransformCase}
+                onSetTextSelectionRange={handleSetTextSelectionRange}
+                onApplyErrorFix={handleApplyErrorFix}
+                onIgnoreError={handleIgnoreError}
                 onResetSelectedText={handleResetSelectedText}
                 onReplaceSelectedImage={handleReplaceSelectedImage}
                 onDeleteSelected={handleDeleteSelected}

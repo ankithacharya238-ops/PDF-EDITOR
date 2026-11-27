@@ -6,12 +6,18 @@ import {
   SHARPENING_PRESETS,
   resolveFontOption,
 } from '../../config/editorConfig';
+import { analyzeTextErrors } from '../../utils/textChecker';
+import {
+  applyCaseTransform,
+  spliceFabricTextPreservingStyles,
+} from '../../utils/textFormatting';
 
 const CUSTOM_PROPS = [
   'nexFontId',
   'nexFontSubstituted',
   'nexOriginalFont',
   'nexOriginalFormat',
+  'nexIgnoredErrors',
   'nexKind',
   'nexShapeType',
   'nexLockAspect',
@@ -24,10 +30,6 @@ function rgbToHex(r, g, b) {
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
-/**
- * Samples both the surrounding background color and the dominant foreground ink color
- * inside a PDF text bounding box so clicking existing PDF text preserves its real color.
- */
 function sampleCanvasBgAndFgColor(canvas, left, top, width, height, scale) {
   try {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -45,7 +47,6 @@ function sampleCanvasBgAndFgColor(canvas, left, top, width, height, scale) {
     const bgB = Math.round((p1[2] + p2[2]) / 2);
     const bgColor = rgbToHex(bgR, bgG, bgB);
 
-    // Scan interior sample grid to find highest-contrast foreground glyph ink color
     const xStart = Math.max(0, Math.floor(left * mult));
     const yStart = Math.max(0, Math.floor(top * mult));
     const xEnd = Math.min(canvas.width - 1, Math.ceil((left + Math.min(width, 160)) * mult));
@@ -81,6 +82,93 @@ function sampleCanvasBgAndFgColor(canvas, left, top, width, height, scale) {
   }
 }
 
+function drawErrorUnderlinesForCanvas(fc) {
+  const ctx = fc.contextContainer;
+  if (!ctx) return;
+  const retina = fc.getRetinaScaling ? fc.getRetinaScaling() : 1;
+  const vpt = fc.viewportTransform || [1, 0, 0, 1, 0, 0];
+
+  for (const obj of fc.getObjects()) {
+    if (obj.type !== 'textbox' && obj.type !== 'i-text' && obj.type !== 'text') continue;
+    if (!obj.text || !obj._textLines || !obj.__charBounds) continue;
+
+    const issues = analyzeTextErrors(obj.text, obj.nexIgnoredErrors || []);
+    if (issues.length === 0) continue;
+
+    const objMatrix = obj.calcTransformMatrix();
+    const m = fabric.util.multiplyTransformMatrices(vpt, objMatrix);
+    const leftBase = obj._getLeftOffset();
+    const topBase = obj._getTopOffset();
+
+    // Precompute cumulative line Y offsets
+    const lineY = [];
+    let accY = 0;
+    for (let li = 0; li < obj._textLines.length; li++) {
+      const h = obj.getHeightOfLine(li);
+      const maxH = h / (obj.lineHeight || 1.16);
+      lineY.push(topBase + accY + maxH * 0.94);
+      accY += h;
+    }
+
+    ctx.save();
+    ctx.setTransform(retina, 0, 0, retina, 0, 0);
+    ctx.strokeStyle = '#ef4444';
+    ctx.lineWidth = 1.35;
+
+    for (const issue of issues) {
+      const startLoc = obj.get2DCursorLocation(issue.start, false);
+      const endLoc = obj.get2DCursorLocation(Math.max(issue.start, issue.end - 1), false);
+
+      for (let li = startLoc.lineIndex; li <= endLoc.lineIndex; li++) {
+        const boundsArr = obj.__charBounds[li];
+        const lineChars = obj._textLines[li];
+        if (!boundsArr || !lineChars || lineChars.length === 0) continue;
+
+        const cStart = li === startLoc.lineIndex ? startLoc.charIndex : 0;
+        const cEnd = li === endLoc.lineIndex ? Math.min(endLoc.charIndex, boundsArr.length - 1) : boundsArr.length - 1;
+        const firstBox = boundsArr[cStart];
+        const lastBox = boundsArr[cEnd];
+        if (!firstBox || !lastBox) continue;
+
+        const lineLeftOff = obj._getLineLeftOffset(li);
+        const x1Local = leftBase + lineLeftOff + firstBox.left;
+        const x2Local = leftBase + lineLeftOff + lastBox.left + (lastBox.width || 4);
+        const yLocal = lineY[li];
+
+        const p1 = fabric.util.transformPoint(new fabric.Point(x1Local, yLocal), m);
+        const p2 = fabric.util.transformPoint(new fabric.Point(x2Local, yLocal), m);
+
+        // Draw crisp red wavy underline along [p1 -> p2]
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 2) continue;
+
+        const ux = dx / dist;
+        const uy = dy / dist;
+        const nx = -uy;
+        const ny = ux;
+        const step = 3.5;
+        const amp = 1.35;
+
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        let dir = 1;
+        for (let d = step; d <= dist; d += step) {
+          const px = p1.x + ux * d + nx * amp * dir;
+          const py = p1.y + uy * d + ny * amp * dir;
+          ctx.lineTo(px, py);
+          dir *= -1;
+        }
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+  }
+}
+
 export default function PdfPageCanvas({
   pageSpec,
   pageIndex,
@@ -96,6 +184,7 @@ export default function PdfPageCanvas({
   onSelectTool,
   onCommitPageUpdate,
   onSelectObject,
+  onClickTextError,
   registerPageApi,
   onToast,
 }) {
@@ -242,12 +331,27 @@ export default function PdfPageCanvas({
         ? '400'
         : String(obj.fontWeight);
 
+    const selStart = obj.isEditing ? (obj.selectionStart ?? 0) : (obj.nexSavedSelection?.start ?? 0);
+    const selEnd = obj.isEditing ? (obj.selectionEnd ?? 0) : (obj.nexSavedSelection?.end ?? 0);
+    let activeSelectionStyle = null;
+    if (kind === 'text' && selEnd > selStart && obj.getSelectionStyles) {
+      const stylesArr = obj.getSelectionStyles(selStart, selStart + 1);
+      if (stylesArr?.[0]) activeSelectionStyle = stylesArr[0];
+    }
+
+    const textIssues =
+      kind === 'text' ? analyzeTextErrors(obj.text || '', obj.nexIgnoredErrors || []) : [];
+
     onSelectObject({
       pageId: pageSpec.id,
       kind,
       type: obj.type,
       shapeType: obj.nexShapeType || obj.type,
       text: obj.text ?? '',
+      selectionStart: selStart,
+      selectionEnd: selEnd,
+      activeSelectionStyle,
+      textIssues,
       fontSize: Math.round((obj.fontSize || 16) * (obj.scaleY || 1)),
       nexFontId: obj.nexFontId || 'Helvetica',
       nexFontSubstituted: Boolean(obj.nexFontSubstituted),
@@ -257,6 +361,7 @@ export default function PdfPageCanvas({
       fontStyle: obj.fontStyle || 'normal',
       underline: Boolean(obj.underline),
       fill: obj.fill || '#0f172a',
+      textBackgroundColor: obj.textBackgroundColor || '',
       stroke: obj.stroke || '#38bdf8',
       strokeWidth: obj.strokeWidth ?? 2,
       textAlign: obj.textAlign || 'left',
@@ -437,13 +542,12 @@ export default function PdfPageCanvas({
 
     const handleTextChanged = () => {
       if (isInternalSyncRef.current) return;
-      const active = fc.getActiveObject();
-      // Preserve object-level font family, size, weight & color if Fabric cleared/reset inline styles
-      if (active && active.styles && Object.keys(active.styles).length > 0) {
-        active.styles = {};
-      }
       notifySelection();
       commitFabricChanges();
+    };
+
+    const handleTextSelectionChanged = () => {
+      notifySelection();
     };
 
     const handlePathCreated = () => {
@@ -498,7 +602,28 @@ export default function PdfPageCanvas({
         }
       }
 
+      // Detect click on a red-underlined spelling/grammar error inside a Textbox
+      if (opt.target && (opt.target.type === 'textbox' || opt.target.type === 'i-text')) {
+        const tb = opt.target;
+        try {
+          if (typeof tb.getSelectionStartFromPointer === 'function') {
+            const charIdx = tb.getSelectionStartFromPointer(opt.e);
+            const issues = analyzeTextErrors(tb.text || '', tb.nexIgnoredErrors || []);
+            const hitIssue = issues.find((iss) => charIdx >= iss.start && charIdx <= iss.end);
+            if (hitIssue) {
+              onClickTextError?.(hitIssue);
+            } else {
+              onClickTextError?.(null);
+            }
+          }
+        } catch {
+          // ignore pointer check edge cases
+        }
+        return;
+      }
+
       if (opt.target) return;
+      onClickTextError?.(null);
 
       if (t === 'addText') {
         const curPreset =
@@ -515,6 +640,7 @@ export default function PdfPageCanvas({
           fontFamily: fontOpt.cssFamily,
           nexFontId: fontOpt.id,
           nexOriginalFormat: { ...DEFAULT_TEXT_STYLE },
+          nexIgnoredErrors: [],
           nexKind: 'text',
           lineHeight: DEFAULT_TEXT_STYLE.lineHeight,
           charSpacing: DEFAULT_TEXT_STYLE.charSpacing,
@@ -712,17 +838,39 @@ export default function PdfPageCanvas({
       }
     };
 
+    const handleAfterRender = () => {
+      drawErrorUnderlinesForCanvas(fc);
+    };
+
     fc.on('selection:created', handleSelection);
     fc.on('selection:updated', handleSelection);
     fc.on('selection:cleared', handleCleared);
     fc.on('object:modified', handleModified);
     fc.on('text:changed', handleTextChanged);
+    fc.on('text:selection:changed', handleTextSelectionChanged);
     fc.on('path:created', handlePathCreated);
     fc.on('mouse:down', handleMouseDown);
     fc.on('mouse:move', handleMouseMove);
     fc.on('mouse:up', handleMouseUp);
+    fc.on('after:render', handleAfterRender);
+
+    const getActiveSelectionRange = (obj) => {
+      if (obj.isEditing && (obj.selectionEnd ?? 0) > (obj.selectionStart ?? 0)) {
+        return { start: obj.selectionStart, end: obj.selectionEnd };
+      }
+      if (obj.nexSavedSelection && obj.nexSavedSelection.end > obj.nexSavedSelection.start) {
+        return obj.nexSavedSelection;
+      }
+      return null;
+    };
 
     registerPageApi(pageSpec.id, {
+      setTextSelectionRange: (start, end) => {
+        const obj = fc.getActiveObject();
+        if (!obj || (obj.type !== 'textbox' && obj.type !== 'i-text')) return;
+        obj.nexSavedSelection = end > start ? { start, end } : null;
+        notifySelection();
+      },
       insertImage: (dataUrl, opts = {}) => {
         fabric.Image.fromURL(
           dataUrl,
@@ -778,6 +926,7 @@ export default function PdfPageCanvas({
         if (!obj) return;
 
         const nextPatch = { ...patch };
+        const isTextObj = obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'text';
 
         if (nextPatch.fontFamilyId) {
           const fOpt = resolveFontOption(nextPatch.fontFamilyId);
@@ -793,26 +942,112 @@ export default function PdfPageCanvas({
           nextPatch.scaleY = Math.max(8, nextPatch.targetHeight) / (obj.height || 100);
           delete nextPatch.targetHeight;
         }
-        if (typeof nextPatch.fontSize === 'number' && (obj.type === 'textbox' || obj.type === 'i-text')) {
-          const visWidth = Math.max(40, (obj.width || 120) * (obj.scaleX || 1));
-          nextPatch.width = visWidth;
-          nextPatch.scaleX = 1;
-          nextPatch.scaleY = 1;
-        }
         if (typeof nextPatch.lockAspect === 'boolean') {
           nextPatch.lockUniScaling = nextPatch.lockAspect;
           nextPatch.nexLockAspect = nextPatch.lockAspect;
           delete nextPatch.lockAspect;
         }
 
-        // Keep formatting consistent across the whole text object when editing
-        if (obj.type === 'textbox' || obj.type === 'i-text') {
-          obj.styles = {};
+        // Selective Formatting for a sub-range [start, end)
+        const selRange = isTextObj ? getActiveSelectionRange(obj) : null;
+        const charStyleKeys = [
+          'fontFamily',
+          'nexFontId',
+          'fontSize',
+          'fontWeight',
+          'fontStyle',
+          'underline',
+          'fill',
+          'textBackgroundColor',
+        ];
+        const selectivePatch = {};
+        for (const k of charStyleKeys) {
+          if (nextPatch[k] !== undefined) {
+            selectivePatch[k] = nextPatch[k];
+          }
+        }
+
+        if (selRange && Object.keys(selectivePatch).length > 0 && nextPatch.text === undefined) {
+          obj.setSelectionStyles(selectivePatch, selRange.start, selRange.end);
+          // Also apply non-char keys (like textAlign or lineHeight) at block level if present
+          for (const k of charStyleKeys) delete nextPatch[k];
+          if (Object.keys(nextPatch).length > 0) {
+            obj.set(nextPatch);
+          }
+          obj.set({ dirty: true });
+          obj.setCoords();
+          fc.renderAll();
+          notifySelection();
+          commitFabricChanges();
+          return;
+        }
+
+        // Whole-block update: preserve unrelated selective styles while updating edited keys
+        if (isTextObj) {
+          if (typeof nextPatch.fontSize === 'number') {
+            const visWidth = Math.max(40, (obj.width || 120) * (obj.scaleX || 1));
+            nextPatch.width = visWidth;
+            nextPatch.scaleX = 1;
+            nextPatch.scaleY = 1;
+          }
+          // If updating a specific property across whole block, clear only that property's per-char override
+          if (obj.styles && nextPatch.text === undefined) {
+            const keysToClear = Object.keys(selectivePatch);
+            if (keysToClear.length > 0) {
+              for (const lineKey of Object.keys(obj.styles)) {
+                const lineMap = obj.styles[lineKey];
+                if (!lineMap) continue;
+                for (const charKey of Object.keys(lineMap)) {
+                  for (const propKey of keysToClear) {
+                    delete lineMap[charKey][propKey];
+                  }
+                }
+              }
+            }
+          }
           nextPatch.dirty = true;
         }
 
         obj.set(nextPatch);
         obj.setCoords();
+        fc.renderAll();
+        notifySelection();
+        commitFabricChanges();
+      },
+      transformSelectedCase: (mode) => {
+        const obj = fc.getActiveObject();
+        if (!obj || (obj.type !== 'textbox' && obj.type !== 'i-text' && obj.type !== 'text')) return;
+        const oldText = obj.text || '';
+        const range = getActiveSelectionRange(obj);
+        if (range) {
+          const transformed = applyCaseTransform(oldText.slice(range.start, range.end), mode);
+          spliceFabricTextPreservingStyles(obj, range.start, range.end, transformed);
+        } else {
+          const transformed = applyCaseTransform(oldText, mode);
+          spliceFabricTextPreservingStyles(obj, 0, oldText.length, transformed);
+        }
+        obj.setCoords();
+        fc.renderAll();
+        notifySelection();
+        commitFabricChanges();
+      },
+      applyTextErrorFix: (issue, replacement) => {
+        const obj = fc.getActiveObject();
+        if (!obj || (obj.type !== 'textbox' && obj.type !== 'i-text' && obj.type !== 'text')) return;
+        spliceFabricTextPreservingStyles(obj, issue.start, issue.end, replacement);
+        obj.nexSavedSelection = null;
+        obj.setCoords();
+        fc.renderAll();
+        notifySelection();
+        commitFabricChanges();
+      },
+      ignoreTextError: (issueKey) => {
+        const obj = fc.getActiveObject();
+        if (!obj) return;
+        const existing = obj.nexIgnoredErrors || [];
+        if (!existing.includes(issueKey)) {
+          obj.set({ nexIgnoredErrors: [...existing, issueKey], dirty: true });
+        }
         fc.renderAll();
         notifySelection();
         commitFabricChanges();
@@ -831,6 +1066,7 @@ export default function PdfPageCanvas({
           fontStyle: base.fontStyle || 'normal',
           underline: Boolean(base.underline),
           fill: base.fill || '#0f172a',
+          textBackgroundColor: '',
           textAlign: base.textAlign || 'left',
           lineHeight: base.lineHeight ?? 1.2,
           charSpacing: base.charSpacing ?? 0,
@@ -973,6 +1209,7 @@ export default function PdfPageCanvas({
       nexFontSubstituted: block.fontInfo.isEmbeddedSubset,
       nexOriginalFont: block.fontInfo.rawFontName,
       nexOriginalFormat: originalFormat,
+      nexIgnoredErrors: [],
       nexKind: 'text',
       lineHeight: 1.18,
       charSpacing: 0,

@@ -86,49 +86,124 @@ function sanitizeWinAnsi(text = '') {
     .replace(/[^\x09\x0A\x0D\x20-\xFF]/g, '?');
 }
 
-function wrapTextToWidth(text, font, size, maxWidth, charSpacingPt = 0) {
-  const lines = [];
-  const paragraphs = (text || '').split(/\r?\n/);
+/**
+ * Resolves per-character style overrides from either Fabric's serialized
+ * [{ start, end, style }] array or 2D { lineIdx: { charIdx: style } } map.
+ */
+function buildCharStyleLookup(obj) {
+  const text = obj.text || '';
+  const perChar = new Array(text.length).fill(null);
 
-  for (const para of paragraphs) {
-    if (!para) {
-      lines.push({ text: '', isLastInPara: true });
-      continue;
-    }
-    const words = para.split(' ');
-    let current = '';
-    for (const word of words) {
-      const candidate = current ? `${current} ${word}` : word;
-      const w = font.widthOfTextAtSize(candidate, size) + Math.max(0, candidate.length - 1) * charSpacingPt;
-      if (w <= maxWidth + 4 || !current) {
-        current = candidate;
-      } else {
-        lines.push({ text: current, isLastInPara: false });
-        current = word;
+  if (Array.isArray(obj.styles)) {
+    for (const span of obj.styles) {
+      if (!span || !span.style) continue;
+      const s = Math.max(0, span.start || 0);
+      const e = Math.min(text.length, span.end ?? s);
+      for (let i = s; i < e; i++) {
+        perChar[i] = { ...(perChar[i] || {}), ...span.style };
       }
     }
-    if (current) lines.push({ text: current, isLastInPara: true });
+  } else if (obj.styles && typeof obj.styles === 'object') {
+    const rawLines = text.split('\n');
+    let offset = 0;
+    for (let li = 0; li < rawLines.length; li++) {
+      const lineMap = obj.styles[li];
+      if (lineMap && typeof lineMap === 'object') {
+        for (const [ciStr, st] of Object.entries(lineMap)) {
+          const ci = Number(ciStr);
+          if (!Number.isNaN(ci) && offset + ci < text.length) {
+            perChar[offset + ci] = { ...(perChar[offset + ci] || {}), ...st };
+          }
+        }
+      }
+      offset += rawLines[li].length + 1;
+    }
   }
+
+  return (charIdx) => {
+    const st = perChar[charIdx] || {};
+    const scaleY = obj.scaleY ?? 1;
+    const rawSize = st.fontSize || obj.fontSize || 16;
+    const fontWeight = st.fontWeight ?? obj.fontWeight ?? '400';
+    const fontStyle = st.fontStyle ?? obj.fontStyle ?? 'normal';
+    const isBold = fontWeight === 'bold' || Number(fontWeight) >= 600;
+    const isItalic = fontStyle === 'italic';
+    const fontId = st.nexFontId || (st.fontFamily ? resolveFontOption(st.fontFamily).id : obj.nexFontId || 'Helvetica');
+
+    return {
+      fontId,
+      fontSize: rawSize * scaleY,
+      isBold,
+      isItalic,
+      underline: Boolean(st.underline !== undefined ? st.underline : obj.underline),
+      fill: st.fill || obj.fill || '#0f172a',
+      textBackgroundColor: st.textBackgroundColor ?? obj.textBackgroundColor ?? '',
+    };
+  };
+}
+
+function wrapStyledTextToWidth(text, getCharStyle, getPdfFontSync, maxWidth, charSpacingPt = 0) {
+  const lines = [];
+  let cursor = 0;
+  const paragraphs = (text || '').split(/\r?\n/);
+
+  for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
+    const para = paragraphs[pIdx];
+    if (!para) {
+      lines.push({ chars: [], isLastInPara: true });
+      cursor += 1;
+      continue;
+    }
+
+    const tokens = [];
+    let pos = 0;
+    while (pos < para.length) {
+      const isSpace = para[pos] === ' ';
+      let end = pos + 1;
+      while (end < para.length && (para[end] === ' ') === isSpace) end++;
+      const chars = [];
+      for (let k = pos; k < end; k++) {
+        const ch = sanitizeWinAnsi(para[k]);
+        const style = getCharStyle(cursor + k);
+        const font = getPdfFontSync(style.fontId, style.isBold, style.isItalic);
+        const w = font.widthOfTextAtSize(ch, style.fontSize) + charSpacingPt;
+        chars.push({ ch, style, font, w });
+      }
+      tokens.push({ isSpace, chars, width: chars.reduce((a, c) => a + c.w, 0) });
+      pos = end;
+    }
+
+    let currentChars = [];
+    let currentWidth = 0;
+    for (const tok of tokens) {
+      if (currentChars.length === 0 && tok.isSpace) continue;
+      if (currentWidth + tok.width <= maxWidth + 4 || currentChars.length === 0) {
+        currentChars.push(...tok.chars);
+        currentWidth += tok.width;
+      } else {
+        // Trim trailing spaces on wrap
+        while (currentChars.length > 0 && currentChars[currentChars.length - 1].ch === ' ') {
+          currentChars.pop();
+        }
+        lines.push({ chars: currentChars, isLastInPara: false });
+        currentChars = tok.isSpace ? [] : [...tok.chars];
+        currentWidth = tok.isSpace ? 0 : tok.width;
+      }
+    }
+    if (currentChars.length > 0) {
+      lines.push({ chars: currentChars, isLastInPara: true });
+    }
+    cursor += para.length + 1;
+  }
+
   return lines;
 }
 
-/**
- * Maps a point from visual top-left rotated canvas coordinates (72 DPI)
- * into pdf-lib MediaBox bottom-left coordinates (accounting for page /Rotate).
- */
 function visualPointToMediaBox(vx, vy, mediaW, mediaH, totalRotDeg) {
   const rot = ((totalRotDeg % 360) + 360) % 360;
-  if (rot === 90) {
-    // Visual width = mediaH, Visual height = mediaW
-    return { x: vy, y: vx };
-  }
-  if (rot === 180) {
-    return { x: mediaW - vx, y: vy };
-  }
-  if (rot === 270) {
-    // Visual width = mediaH, Visual height = mediaW
-    return { x: mediaW - vy, y: mediaH - vx };
-  }
+  if (rot === 90) return { x: vy, y: vx };
+  if (rot === 180) return { x: mediaW - vx, y: vy };
+  if (rot === 270) return { x: mediaW - vy, y: mediaH - vx };
   return { x: vx, y: mediaH - vy };
 }
 
@@ -173,23 +248,37 @@ function roundedRectSvgPath(w, h, rx, ry) {
 }
 
 /**
- * Exports the full edited PDF document using pdf-lib:
- * 1. Handles page ordering, duplication, blank page creation, deletion, and rotation.
- * 2. Performs genuine content-stream text & image removal via editPageContentStream.
- * 3. Renders all added/edited Fabric.js objects with exact 72-DPI coordinate fidelity.
+ * Exports the full edited PDF document using pdf-lib, preserving selective per-run
+ * typography, inline text highlighting, alignment, stream removals, images, and pages.
  */
 export async function exportEditedPdf({ originalPdfBytes, pagesState, pageMetadataMap }) {
   const srcDoc = await PDFDocument.load(originalPdfBytes, { ignoreEncryption: true });
   const outDoc = await PDFDocument.create();
 
+  // Pre-embed all standard font variants so styled wrapping can query synchronously
   const fontCache = {};
-  const getPdfFont = async (fontId = 'Helvetica', isBold = false, isItalic = false) => {
+  const allStdFonts = [
+    StandardFonts.Helvetica,
+    StandardFonts.HelveticaBold,
+    StandardFonts.HelveticaOblique,
+    StandardFonts.HelveticaBoldOblique,
+    StandardFonts.TimesRoman,
+    StandardFonts.TimesRomanBold,
+    StandardFonts.TimesRomanItalic,
+    StandardFonts.TimesRomanBoldItalic,
+    StandardFonts.Courier,
+    StandardFonts.CourierBold,
+    StandardFonts.CourierOblique,
+    StandardFonts.CourierBoldOblique,
+  ];
+  for (const sf of allStdFonts) {
+    fontCache[sf] = await outDoc.embedFont(sf);
+  }
+
+  const getPdfFontSync = (fontId = 'Helvetica', isBold = false, isItalic = false) => {
     const def = resolveFontOption(fontId);
     const variant = getFontVariantKey(isBold, isItalic);
     const stdFont = def.pdfStandard[variant] || StandardFonts.Helvetica;
-    if (!fontCache[stdFont]) {
-      fontCache[stdFont] = await outDoc.embedFont(stdFont);
-    }
     return fontCache[stdFont];
   };
 
@@ -225,7 +314,6 @@ export async function exportEditedPdf({ originalPdfBytes, pagesState, pageMetada
     const { width: mediaW, height: mediaH } = outPage.getSize();
     const meta = pageSpec.isBlank ? null : pageMetadataMap[pageSpec.sourcePageIndex];
 
-    // 1. Genuine stream-level removal of deleted/edited original text & deleted/replaced images
     if (!pageSpec.isBlank && meta) {
       const removedTextIds = new Set(pageSpec.removedTextIds || []);
       const removedImageIds = new Set(pageSpec.removedImageIds || []);
@@ -248,7 +336,6 @@ export async function exportEditedPdf({ originalPdfBytes, pagesState, pageMetada
       stats.streamRemovedText += streamRes.matchedTextCount;
       stats.streamRemovedImages += streamRes.matchedImageCount;
 
-      // Fallback only for items nested inside uneditable Form XObjects
       for (const fallbackText of streamRes.unmatchedTextItems) {
         stats.fallbackMaskedItems++;
         const block = meta.textBlocks.find((b) => fallbackText._uid.startsWith(b.id));
@@ -276,7 +363,6 @@ export async function exportEditedPdf({ originalPdfBytes, pagesState, pageMetada
     const toMedia = (vx, vy) => visualPointToMediaBox(vx, vy, mediaW, mediaH, totalRotation);
     const objAngleInMedia = (fabricAngle = 0) => -(fabricAngle || 0) + totalRotation;
 
-    // 2. Render Fabric objects from canonical 72-DPI JSON
     const fabricObjects = pageSpec.fabricJson?.objects || [];
     for (const obj of fabricObjects) {
       const scaleX = obj.scaleX ?? 1;
@@ -285,101 +371,182 @@ export async function exportEditedPdf({ originalPdfBytes, pagesState, pageMetada
       const opacity = obj.opacity ?? 1;
 
       if (obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'text') {
-        const fontSize = (obj.fontSize || 16) * scaleY;
-        const isBold = obj.fontWeight === 'bold' || Number(obj.fontWeight) >= 600;
-        const isItalic = obj.fontStyle === 'italic';
-        const fontId = obj.nexFontId || 'Helvetica';
-        const pdfFont = await getPdfFont(fontId, isBold, isItalic);
-        const color = hexToRgbTuple(obj.fill || '#0f172a') || rgb(0.06, 0.09, 0.16);
-        const charSpacingPt = ((obj.charSpacing || 0) / 1000) * fontSize;
+        const baseFontSize = (obj.fontSize || 16) * scaleY;
+        const charSpacingPt = ((obj.charSpacing || 0) / 1000) * baseFontSize;
         const boxWidth = (obj.width || 240) * scaleX;
         const lineHeightMult = obj.lineHeight || 1.2;
+        const getCharStyle = buildCharStyleLookup(obj);
 
-        const safeText = sanitizeWinAnsi(obj.text || '');
-        const lines = wrapTextToWidth(safeText, pdfFont, fontSize, boxWidth, charSpacingPt);
+        const lines = wrapStyledTextToWidth(
+          obj.text || '',
+          getCharStyle,
+          getPdfFontSync,
+          boxWidth,
+          charSpacingPt
+        );
 
         const baseLeft = obj.left || 0;
         const baseTop = obj.top || 0;
+        let currentVy = baseTop;
 
-        lines.forEach((lineObj, idx) => {
-          const line = lineObj.text;
-          if (!line) return;
-          const lineWidth =
-            pdfFont.widthOfTextAtSize(line, fontSize) + Math.max(0, line.length - 1) * charSpacingPt;
-          let drawVx = baseLeft;
+        lines.forEach((lineObj) => {
+          const chars = lineObj.chars;
+          const maxLineFontSize =
+            chars.length > 0
+              ? Math.max(...chars.map((c) => c.style.fontSize))
+              : baseFontSize;
+
+          if (chars.length === 0) {
+            currentVy += maxLineFontSize * lineHeightMult;
+            return;
+          }
+
+          const rawLineWidth = chars.reduce((acc, c) => acc + c.w, 0) - charSpacingPt;
+          let startVx = baseLeft;
           if (obj.textAlign === 'center') {
-            drawVx = baseLeft + Math.max(0, (boxWidth - lineWidth) / 2);
+            startVx = baseLeft + Math.max(0, (boxWidth - rawLineWidth) / 2);
           } else if (obj.textAlign === 'right') {
-            drawVx = baseLeft + Math.max(0, boxWidth - lineWidth);
+            startVx = baseLeft + Math.max(0, boxWidth - rawLineWidth);
           }
 
-          const baselineVy = baseTop + fontSize * 0.88 + idx * fontSize * lineHeightMult;
+          const spaceCount = chars.filter((c) => c.ch === ' ').length;
+          const extraSpacePerGap =
+            obj.textAlign === 'justify' && !lineObj.isLastInPara && spaceCount > 0
+              ? Math.max(0, (boxWidth - rawLineWidth) / spaceCount)
+              : 0;
 
-          if (obj.textAlign === 'justify' && !lineObj.isLastInPara && line.includes(' ')) {
-            const words = line.split(' ');
-            const wordsWidth = words.reduce(
-              (acc, w) => acc + pdfFont.widthOfTextAtSize(w, fontSize) + Math.max(0, w.length - 1) * charSpacingPt,
-              0
-            );
-            const extraSpace = Math.max(0, (boxWidth - wordsWidth) / Math.max(1, words.length - 1));
-            let cursorVx = baseLeft;
-            for (const w of words) {
-              const rotatedVis = rotatePointAround(cursorVx, baselineVy, baseLeft, baseTop, angle);
-              const mp = toMedia(rotatedVis.x, rotatedVis.y);
-              outPage.drawText(w, {
+          const baselineVy = currentVy + maxLineFontSize * 0.88;
+
+          // Group consecutive characters with matching styles into runs
+          const runs = [];
+          let cursorVx = startVx;
+          for (const c of chars) {
+            const advance = c.w + (c.ch === ' ' ? extraSpacePerGap : 0);
+            const prev = runs[runs.length - 1];
+            const sameRun =
+              prev &&
+              prev.style.fontId === c.style.fontId &&
+              prev.style.fontSize === c.style.fontSize &&
+              prev.style.isBold === c.style.isBold &&
+              prev.style.isItalic === c.style.isItalic &&
+              prev.style.fill === c.style.fill &&
+              prev.style.underline === c.style.underline &&
+              prev.style.textBackgroundColor === c.style.textBackgroundColor &&
+              c.ch !== ' '; // split spaces cleanly when justifying
+
+            if (sameRun && extraSpacePerGap === 0) {
+              prev.text += c.ch;
+              prev.width += advance;
+            } else {
+              runs.push({
+                text: c.ch,
+                startVx: cursorVx,
+                width: advance,
+                style: c.style,
+                font: c.font,
+              });
+            }
+            cursorVx += advance;
+          }
+
+          // Merge adjacent runs with identical styles when not justified (cleaner PDF text streams)
+          const mergedRuns = [];
+          for (const r of runs) {
+            const prev = mergedRuns[mergedRuns.length - 1];
+            if (
+              prev &&
+              extraSpacePerGap === 0 &&
+              prev.style.fontId === r.style.fontId &&
+              prev.style.fontSize === r.style.fontSize &&
+              prev.style.isBold === r.style.isBold &&
+              prev.style.isItalic === r.style.isItalic &&
+              prev.style.fill === r.style.fill &&
+              prev.style.underline === r.style.underline &&
+              prev.style.textBackgroundColor === r.style.textBackgroundColor
+            ) {
+              prev.text += r.text;
+              prev.width += r.width;
+            } else {
+              mergedRuns.push(r);
+            }
+          }
+
+          for (const run of mergedRuns) {
+            const rSize = run.style.fontSize;
+            const rColor = hexToRgbTuple(run.style.fill) || rgb(0.06, 0.09, 0.16);
+
+            // 1. Inline text highlight rectangle behind text (never changes font or size)
+            if (run.style.textBackgroundColor && run.style.textBackgroundColor !== 'transparent') {
+              const hlCol = hexToRgbTuple(run.style.textBackgroundColor);
+              if (hlCol) {
+                const hlHeight = rSize * 1.14;
+                const hlBl = rotatePointAround(
+                  run.startVx,
+                  baselineVy + rSize * 0.22,
+                  baseLeft,
+                  baseTop,
+                  angle
+                );
+                const hlMedia = toMedia(hlBl.x, hlBl.y);
+                outPage.drawRectangle({
+                  x: hlMedia.x,
+                  y: hlMedia.y,
+                  width: Math.max(2, run.width),
+                  height: hlHeight,
+                  color: hlCol,
+                  opacity: opacity * 0.85,
+                  rotate: degrees(objAngleInMedia(angle)),
+                });
+              }
+            }
+
+            // 2. Text run drawing
+            if (Math.abs(charSpacingPt) > 0.05) {
+              let chVx = run.startVx;
+              for (const ch of run.text) {
+                const rv = rotatePointAround(chVx, baselineVy, baseLeft, baseTop, angle);
+                const mp = toMedia(rv.x, rv.y);
+                outPage.drawText(ch, {
+                  x: mp.x,
+                  y: mp.y,
+                  size: rSize,
+                  font: run.font,
+                  color: rColor,
+                  opacity,
+                  rotate: degrees(objAngleInMedia(angle)),
+                });
+                chVx += run.font.widthOfTextAtSize(ch, rSize) + charSpacingPt;
+              }
+            } else {
+              const rv = rotatePointAround(run.startVx, baselineVy, baseLeft, baseTop, angle);
+              const mp = toMedia(rv.x, rv.y);
+              outPage.drawText(run.text, {
                 x: mp.x,
                 y: mp.y,
-                size: fontSize,
-                font: pdfFont,
-                color,
+                size: rSize,
+                font: run.font,
+                color: rColor,
                 opacity,
                 rotate: degrees(objAngleInMedia(angle)),
               });
-              cursorVx += pdfFont.widthOfTextAtSize(w, fontSize) + Math.max(0, w.length - 1) * charSpacingPt + extraSpace;
             }
-          } else if (Math.abs(charSpacingPt) > 0.05) {
-            let cursorVx = drawVx;
-            for (const ch of line) {
-              const rotatedVis = rotatePointAround(cursorVx, baselineVy, baseLeft, baseTop, angle);
-              const mp = toMedia(rotatedVis.x, rotatedVis.y);
-              outPage.drawText(ch, {
-                x: mp.x,
-                y: mp.y,
-                size: fontSize,
-                font: pdfFont,
-                color,
+
+            // 3. Underline
+            if (run.style.underline && run.text.trim().length > 0) {
+              const ulY = baselineVy + Math.max(1.5, rSize * 0.12);
+              const rs = rotatePointAround(run.startVx, ulY, baseLeft, baseTop, angle);
+              const re = rotatePointAround(run.startVx + run.width, ulY, baseLeft, baseTop, angle);
+              outPage.drawLine({
+                start: toMedia(rs.x, rs.y),
+                end: toMedia(re.x, re.y),
+                thickness: Math.max(0.8, rSize * 0.06),
+                color: rColor,
                 opacity,
-                rotate: degrees(objAngleInMedia(angle)),
               });
-              cursorVx += pdfFont.widthOfTextAtSize(ch, fontSize) + charSpacingPt;
             }
-          } else {
-            const rotatedVis = rotatePointAround(drawVx, baselineVy, baseLeft, baseTop, angle);
-            const mp = toMedia(rotatedVis.x, rotatedVis.y);
-            outPage.drawText(line, {
-              x: mp.x,
-              y: mp.y,
-              size: fontSize,
-              font: pdfFont,
-              color,
-              opacity,
-              rotate: degrees(objAngleInMedia(angle)),
-            });
           }
 
-          if (obj.underline) {
-            const ulY = baselineVy + Math.max(1.5, fontSize * 0.12);
-            const ulW = obj.textAlign === 'justify' && !lineObj.isLastInPara ? boxWidth : lineWidth;
-            const rs = rotatePointAround(drawVx, ulY, baseLeft, baseTop, angle);
-            const re = rotatePointAround(drawVx + ulW, ulY, baseLeft, baseTop, angle);
-            outPage.drawLine({
-              start: toMedia(rs.x, rs.y),
-              end: toMedia(re.x, re.y),
-              thickness: Math.max(0.8, fontSize * 0.06),
-              color,
-              opacity,
-            });
-          }
+          currentVy += maxLineFontSize * lineHeightMult;
         });
         stats.drawnObjects++;
       } else if (obj.type === 'image' && obj.src) {
@@ -481,7 +648,6 @@ export async function exportEditedPdf({ originalPdfBytes, pagesState, pageMetada
         const p2 = toMedia(rp2.x, rp2.y);
         const p3 = toMedia(rp3.x, rp3.y);
 
-        // Draw SVG triangle when unrotated, or crisp 3-edge stroke fallback when rotated
         if (totalRotation === 0 && !angle) {
           const svgPath = `M ${w / 2} 0 L ${w} ${h} L 0 ${h} Z`;
           outPage.drawSvgPath(svgPath, {
@@ -532,7 +698,6 @@ export async function exportEditedPdf({ originalPdfBytes, pagesState, pageMetada
         const oy = offset.y;
         const left = obj.left || 0;
         const top = obj.top || 0;
-        // Fabric Path bounding box includes strokeWidth around path bounds
         const cx = left + ((obj.width || 0) + (obj.strokeWidth || 0)) * scaleX * 0.5;
         const cy = top + ((obj.height || 0) + (obj.strokeWidth || 0)) * scaleY * 0.5;
 

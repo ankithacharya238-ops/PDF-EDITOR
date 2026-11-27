@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import PdfPageCanvas from './PdfPageCanvas';
+import TextFormattingToolbar from './TextFormattingToolbar';
 import { TOOLS } from '../../config/editorConfig';
 
 export default function PdfCanvasArea({
@@ -13,6 +14,18 @@ export default function PdfCanvasArea({
   activeShapeType,
   drawSettings,
   activePageId,
+  selectedObject,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  onUpdateSelected,
+  onTransformCase,
+  onResetSelectedText,
+  onApplyErrorFix,
+  onIgnoreError,
+  activeErrorPopup,
+  onClickTextError,
   onFocusPage,
   onSelectTool,
   onCommitPageUpdate,
@@ -23,7 +36,6 @@ export default function PdfCanvasArea({
 }) {
   const toolMeta = TOOLS.find((t) => t.id === activeTool);
 
-  // Keep activePageId synced automatically as user scrolls through pages
   useEffect(() => {
     const root = containerRef?.current;
     if (!root || pagesState.length <= 1) return;
@@ -57,17 +69,35 @@ export default function PdfCanvasArea({
   return (
     <main
       ref={containerRef}
-      className="flex-1 overflow-auto bg-[#070a15] relative flex flex-col items-center py-10 px-4 sm:px-8 gap-12"
+      className="flex-1 overflow-auto bg-[#070a15] relative flex flex-col items-center py-6 px-4 sm:px-8 gap-8"
     >
-      <div className="sticky top-2 z-20 pointer-events-none">
-        <div className="glass-panel px-3.5 py-1.5 rounded-full border border-white/15 text-[11px] text-slate-300 flex items-center gap-2 shadow-lg">
-          <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-          <span className="font-semibold text-white">{toolMeta?.label}:</span>
-          <span className="hidden sm:inline text-slate-300">{toolMeta?.description}</span>
+      {/* Contextual Rich Text Formatting Toolbar when Text is selected; otherwise subtle tool hint */}
+      {selectedObject?.kind === 'text' ? (
+        <TextFormattingToolbar
+          selectedObject={selectedObject}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={onUndo}
+          onRedo={onRedo}
+          onUpdateSelected={onUpdateSelected}
+          onTransformCase={onTransformCase}
+          onResetText={onResetSelectedText}
+          onApplyErrorFix={onApplyErrorFix}
+          onIgnoreError={onIgnoreError}
+          activeErrorPopup={activeErrorPopup}
+          onCloseErrorPopup={() => onClickTextError?.(null)}
+        />
+      ) : (
+        <div className="sticky top-2 z-20 pointer-events-none">
+          <div className="glass-panel px-3.5 py-1.5 rounded-full border border-white/15 text-[11px] text-slate-300 flex items-center gap-2 shadow-lg">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+            <span className="font-semibold text-white">{toolMeta?.label}:</span>
+            <span className="hidden sm:inline text-slate-300">{toolMeta?.description}</span>
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="flex flex-col items-center gap-12 pb-24">
+      <div className="flex flex-col items-center gap-12 pb-24 pt-2">
         {pagesState.map((pageSpec, idx) => {
           const pdfjsPage = pageSpec.isBlank ? null : pdfjsPagesMap[pageSpec.sourcePageIndex];
           const metadata = pageSpec.isBlank ? null : pageMetadataMap[pageSpec.sourcePageIndex];
@@ -89,6 +119,7 @@ export default function PdfCanvasArea({
               onSelectTool={onSelectTool}
               onCommitPageUpdate={onCommitPageUpdate}
               onSelectObject={onSelectObject}
+              onClickTextError={onClickTextError}
               registerPageApi={registerPageApi}
               onToast={onToast}
             />

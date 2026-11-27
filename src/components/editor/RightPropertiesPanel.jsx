@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
+  AlertCircle,
   AlertTriangle,
   AlignCenter,
   AlignJustify,
@@ -8,9 +9,13 @@ import {
   ArrowDownToLine,
   ArrowUpToLine,
   Bold,
+  Check,
+  CheckCircle2,
   ChevronDown,
   Copy,
+  Eraser,
   FilePlus2,
+  Highlighter,
   ImagePlus,
   Italic,
   Lock,
@@ -18,6 +23,7 @@ import {
   RotateCw,
   Search,
   Sparkles,
+  SpellCheck2,
   Trash2,
   Type,
   Underline,
@@ -30,6 +36,7 @@ import {
   FONT_WEIGHT_OPTIONS,
   HIGHLIGHT_COLORS,
   SHARPENING_PRESETS,
+  TEXT_HIGHLIGHT_SWATCHES,
   resolveFontOption,
 } from '../../config/editorConfig';
 
@@ -41,6 +48,10 @@ export default function RightPropertiesPanel({
   drawSettings,
   onChangeDrawSettings,
   onUpdateSelected,
+  onTransformCase,
+  onSetTextSelectionRange,
+  onApplyErrorFix,
+  onIgnoreError,
   onResetSelectedText,
   onReplaceSelectedImage,
   onDeleteSelected,
@@ -84,13 +95,26 @@ export default function RightPropertiesPanel({
     });
   }, [fontCategory, fontSearch]);
 
-  const activeFontObj = useMemo(
-    () => resolveFontOption(selectedObject?.nexFontId),
-    [selectedObject?.nexFontId]
+  const selStart = selectedObject?.selectionStart ?? 0;
+  const selEnd = selectedObject?.selectionEnd ?? 0;
+  const hasSelection = selEnd > selStart;
+  const selStyle = selectedObject?.activeSelectionStyle || {};
+  const displayFontObj = useMemo(
+    () =>
+      resolveFontOption(
+        selStyle.nexFontId || (selStyle.fontFamily ? selStyle.fontFamily : selectedObject?.nexFontId)
+      ),
+    [selStyle.nexFontId, selStyle.fontFamily, selectedObject?.nexFontId]
   );
+  const displayFontSize = selStyle.fontSize ?? selectedObject?.fontSize ?? 16;
+  const displayWeight = String(selStyle.fontWeight ?? selectedObject?.fontWeight ?? '400');
+  const displayItalic = (selStyle.fontStyle ?? selectedObject?.fontStyle) === 'italic';
+  const displayUnderline = Boolean(selStyle.underline ?? selectedObject?.underline);
+  const displayColor = selStyle.fill ?? selectedObject?.fill ?? '#0f172a';
+  const displayHighlight = selStyle.textBackgroundColor ?? selectedObject?.textBackgroundColor ?? '';
+  const textIssues = selectedObject?.textIssues || [];
 
-  const isBoldActive =
-    selectedObject?.fontWeight === 'bold' || Number(selectedObject?.fontWeight || 400) >= 600;
+  const isBoldActive = displayWeight === 'bold' || Number(displayWeight) >= 600;
 
   return (
     <aside
@@ -181,29 +205,32 @@ export default function RightPropertiesPanel({
           <div className="rounded-xl bg-white p-3 border border-cyan-400/40 shadow-inner overflow-hidden">
             <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
               <span className="font-semibold uppercase tracking-wider text-slate-500">
-                Live Preview
+                Live Preview {hasSelection ? `(Selection ${selEnd - selStart})` : ''}
               </span>
               <span className="font-mono text-slate-500">
-                {activeFontObj.label} • {selectedObject.fontSize}pt • w{selectedObject.fontWeight}
+                {displayFontObj.label} • {displayFontSize}pt • w{displayWeight}
               </span>
             </div>
             <div
               style={{
-                fontFamily: activeFontObj.cssFamily,
-                fontSize: `${Math.min(26, Math.max(12, selectedObject.fontSize))}px`,
-                fontWeight: selectedObject.fontWeight || '400',
-                fontStyle: selectedObject.fontStyle || 'normal',
-                textDecoration: selectedObject.underline ? 'underline' : 'none',
-                color: selectedObject.fill || '#0f172a',
+                fontFamily: displayFontObj.cssFamily,
+                fontSize: `${Math.min(26, Math.max(12, displayFontSize))}px`,
+                fontWeight: displayWeight,
+                fontStyle: displayItalic ? 'italic' : 'normal',
+                textDecoration: displayUnderline ? 'underline' : 'none',
+                color: displayColor,
+                backgroundColor: displayHighlight || 'rgba(241, 245, 249, 0.7)',
                 textAlign: selectedObject.textAlign || 'left',
                 letterSpacing: `${(selectedObject.charSpacing || 0) / 1000}em`,
                 lineHeight: selectedObject.lineHeight || 1.2,
                 WebkitFontSmoothing: 'antialiased',
                 textRendering: 'geometricPrecision',
               }}
-              className="truncate py-1 rounded px-1 bg-slate-100/70"
+              className="truncate py-1 rounded px-1.5"
             >
-              {selectedObject.text?.trim() || 'Aa Bb Cc — Sample Preview 123'}
+              {(hasSelection
+                ? selectedObject.text?.slice(selStart, selEnd)
+                : selectedObject.text?.trim()) || 'Aa Bb Cc — Sample Preview 123'}
             </div>
           </div>
 
@@ -214,17 +241,25 @@ export default function RightPropertiesPanel({
                 <span className="font-semibold block">Embedded Font Preserved Visually</span>
                 PDF subset{' '}
                 <code className="font-mono text-amber-300">{selectedObject.nexOriginalFont || 'Embedded'}</code>{' '}
-                kept size/weight/color; exports with <strong className="text-white">{activeFontObj.label}</strong>.
+                kept size/weight/color; exports with <strong className="text-white">{displayFontObj.label}</strong>.
               </div>
             </div>
           )}
 
-          {/* Text Content */}
+          {/* Text Content (highlighting text here enables Selective Formatting on desktop & mobile!) */}
           <div>
-            <label className="block text-[11px] text-slate-400 mb-1">Text Content</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[11px] text-slate-400">Text Content</label>
+              <span className="text-[10px] text-cyan-300/80">
+                {hasSelection ? `${selEnd - selStart} chars selected` : 'Drag to select word'}
+              </span>
+            </div>
             <textarea
               rows={2}
               value={selectedObject.text}
+              onSelect={(e) => {
+                onSetTextSelectionRange?.(e.target.selectionStart, e.target.selectionEnd);
+              }}
               onChange={(e) => onUpdateSelected({ text: e.target.value })}
               className="w-full rounded-xl bg-slate-900/85 border border-white/10 px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 resize-y"
             />
@@ -242,12 +277,12 @@ export default function RightPropertiesPanel({
             >
               <div className="min-w-0">
                 <div
-                  style={{ fontFamily: activeFontObj.cssFamily }}
+                  style={{ fontFamily: displayFontObj.cssFamily }}
                   className="text-sm text-white truncate"
                 >
-                  {activeFontObj.label}
+                  {displayFontObj.label}
                 </div>
-                <div className="text-[10px] text-cyan-300/80 capitalize">{activeFontObj.category}</div>
+                <div className="text-[10px] text-cyan-300/80 capitalize">{displayFontObj.category}</div>
               </div>
               <ChevronDown
                 className={`w-4 h-4 text-slate-400 transition-transform ${
@@ -258,7 +293,6 @@ export default function RightPropertiesPanel({
 
             {fontPickerOpen && (
               <div className="rounded-xl bg-[#090e24] border border-cyan-400/35 shadow-2xl p-2 space-y-2 z-30">
-                {/* Search */}
                 <div className="relative">
                   <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
                   <input
@@ -270,7 +304,6 @@ export default function RightPropertiesPanel({
                   />
                 </div>
 
-                {/* Category Filter Pills */}
                 <div className="flex flex-wrap gap-1">
                   {FONT_CATEGORIES.map((cat) => (
                     <button
@@ -288,10 +321,9 @@ export default function RightPropertiesPanel({
                   ))}
                 </div>
 
-                {/* Font List */}
                 <div className="max-h-52 overflow-y-auto space-y-1 pr-1">
                   {filteredFonts.map((f) => {
-                    const selected = f.id === activeFontObj.id;
+                    const selected = f.id === displayFontObj.id;
                     return (
                       <button
                         key={f.id}
@@ -331,7 +363,7 @@ export default function RightPropertiesPanel({
                 <button
                   type="button"
                   onClick={() =>
-                    onUpdateSelected({ fontSize: Math.max(6, (selectedObject.fontSize || 16) - 1) })
+                    onUpdateSelected({ fontSize: Math.max(6, displayFontSize - 1) })
                   }
                   className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-white text-xs"
                 >
@@ -341,7 +373,7 @@ export default function RightPropertiesPanel({
                   type="number"
                   min={6}
                   max={144}
-                  value={selectedObject.fontSize}
+                  value={displayFontSize}
                   onChange={(e) =>
                     onUpdateSelected({ fontSize: Math.max(6, Number(e.target.value) || 12) })
                   }
@@ -350,7 +382,7 @@ export default function RightPropertiesPanel({
                 <button
                   type="button"
                   onClick={() =>
-                    onUpdateSelected({ fontSize: Math.min(144, (selectedObject.fontSize || 16) + 1) })
+                    onUpdateSelected({ fontSize: Math.min(144, displayFontSize + 1) })
                   }
                   className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-white text-xs"
                 >
@@ -363,26 +395,48 @@ export default function RightPropertiesPanel({
               min={8}
               max={96}
               step={1}
-              value={Math.min(96, selectedObject.fontSize || 16)}
+              value={Math.min(96, displayFontSize)}
               onChange={(e) => onUpdateSelected({ fontSize: parseInt(e.target.value, 10) })}
               className="w-full accent-cyan-400"
             />
           </div>
 
-          {/* Font Weight Selector */}
-          <div>
-            <label className="block text-[11px] text-slate-400 mb-1">Font Weight</label>
-            <select
-              value={selectedObject.fontWeight || '400'}
-              onChange={(e) => onUpdateSelected({ fontWeight: e.target.value })}
-              className="w-full rounded-xl bg-slate-900/85 border border-white/10 px-2.5 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
-            >
-              {FONT_WEIGHT_OPTIONS.map((w) => (
-                <option key={w.value} value={w.value} className="bg-slate-900">
-                  {w.label}
-                </option>
-              ))}
-            </select>
+          {/* Font Weight Selector + Capitalization */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-[11px] text-slate-400 mb-1">Weight</label>
+              <select
+                value={displayWeight}
+                onChange={(e) => onUpdateSelected({ fontWeight: e.target.value })}
+                className="w-full rounded-xl bg-slate-900/85 border border-white/10 px-2 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+              >
+                {FONT_WEIGHT_OPTIONS.map((w) => (
+                  <option key={w.value} value={w.value} className="bg-slate-900">
+                    {w.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] text-slate-400 mb-1">Capitalization</label>
+              <div className="grid grid-cols-3 gap-1 bg-slate-900/85 border border-white/10 rounded-xl p-1">
+                {[
+                  { mode: 'upper', label: 'AA', title: 'UPPERCASE' },
+                  { mode: 'lower', label: 'aa', title: 'lowercase' },
+                  { mode: 'title', label: 'Aa', title: 'Title Case' },
+                ].map((c) => (
+                  <button
+                    key={c.mode}
+                    type="button"
+                    onClick={() => onTransformCase?.(c.mode)}
+                    title={c.title}
+                    className="py-1 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-violet-500/35 transition-colors"
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           {/* Bold / Italic / Underline & Alignment */}
@@ -406,13 +460,11 @@ export default function RightPropertiesPanel({
                 type="button"
                 onClick={() =>
                   onUpdateSelected({
-                    fontStyle: selectedObject.fontStyle === 'italic' ? 'normal' : 'italic',
+                    fontStyle: displayItalic ? 'normal' : 'italic',
                   })
                 }
                 className={`flex-1 py-1.5 rounded-lg flex justify-center transition-colors ${
-                  selectedObject.fontStyle === 'italic'
-                    ? 'bg-violet-500/35 text-white'
-                    : 'text-slate-400 hover:text-white'
+                  displayItalic ? 'bg-violet-500/35 text-white' : 'text-slate-400 hover:text-white'
                 }`}
                 title="Italic"
               >
@@ -420,11 +472,9 @@ export default function RightPropertiesPanel({
               </button>
               <button
                 type="button"
-                onClick={() => onUpdateSelected({ underline: !selectedObject.underline })}
+                onClick={() => onUpdateSelected({ underline: !displayUnderline })}
                 className={`flex-1 py-1.5 rounded-lg flex justify-center transition-colors ${
-                  selectedObject.underline
-                    ? 'bg-violet-500/35 text-white'
-                    : 'text-slate-400 hover:text-white'
+                  displayUnderline ? 'bg-violet-500/35 text-white' : 'text-slate-400 hover:text-white'
                 }`}
                 title="Underline"
               >
@@ -462,11 +512,11 @@ export default function RightPropertiesPanel({
               <label className="text-[11px] text-slate-400">Text Color</label>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-[10px] text-slate-300 uppercase">
-                  {selectedObject.fill}
+                  {displayColor}
                 </span>
                 <input
                   type="color"
-                  value={selectedObject.fill?.startsWith('#') ? selectedObject.fill : '#0f172a'}
+                  value={displayColor?.startsWith('#') ? displayColor : '#0f172a'}
                   onChange={(e) => onUpdateSelected({ fill: e.target.value })}
                   className="w-6 h-6 rounded cursor-pointer bg-transparent border-0"
                 />
@@ -480,7 +530,37 @@ export default function RightPropertiesPanel({
                   onClick={() => onUpdateSelected({ fill: c })}
                   style={{ backgroundColor: c }}
                   className={`w-5 h-5 rounded-full border ${
-                    selectedObject.fill?.toLowerCase() === c ? 'border-cyan-400 scale-110' : 'border-white/25'
+                    displayColor?.toLowerCase() === c ? 'border-cyan-400 scale-110' : 'border-white/25'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Text Highlighting */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-[11px] text-slate-400 flex items-center gap-1">
+                <Highlighter className="w-3 h-3 text-yellow-300" /> Text Highlight
+              </label>
+              <button
+                type="button"
+                onClick={() => onUpdateSelected({ textBackgroundColor: '' })}
+                className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-rose-300"
+              >
+                <Eraser className="w-3 h-3" /> Clear
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {TEXT_HIGHLIGHT_SWATCHES.map((sw) => (
+                <button
+                  key={sw.color}
+                  type="button"
+                  title={sw.label}
+                  onClick={() => onUpdateSelected({ textBackgroundColor: sw.color })}
+                  style={{ backgroundColor: sw.color }}
+                  className={`w-6 h-6 rounded-full border transition-transform ${
+                    displayHighlight === sw.color ? 'border-cyan-400 scale-110' : 'border-white/30'
                   }`}
                 />
               ))}
@@ -520,6 +600,64 @@ export default function RightPropertiesPanel({
                 className="w-full accent-violet-400"
               />
             </div>
+          </div>
+
+          {/* Spelling & Grammar Error Detection Card */}
+          <div className="rounded-xl bg-slate-900/80 border border-white/10 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-white flex items-center gap-1.5">
+                <SpellCheck2 className="w-3.5 h-3.5 text-cyan-300" />
+                Proofing & Grammar
+              </span>
+              {textIssues.length > 0 ? (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-300">
+                  <AlertCircle className="w-3 h-3" /> {textIssues.length}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-300">
+                  <CheckCircle2 className="w-3 h-3" /> Clean
+                </span>
+              )}
+            </div>
+
+            {textIssues.length === 0 ? (
+              <p className="text-[11px] text-slate-400">No spelling or grammar issues found.</p>
+            ) : (
+              <div className="space-y-1.5 max-h-44 overflow-y-auto pr-0.5">
+                {textIssues.map((issue) => (
+                  <div
+                    key={issue.id}
+                    className="rounded-lg bg-slate-950/80 border border-rose-500/25 p-2 text-[11px] space-y-1"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-rose-300 font-semibold capitalize">{issue.type}</span>
+                      <button
+                        type="button"
+                        onClick={() => onIgnoreError?.(issue.key)}
+                        className="text-[10px] text-slate-400 hover:text-white underline"
+                      >
+                        Ignore
+                      </button>
+                    </div>
+                    <p className="text-slate-300">{issue.message}</p>
+                    {issue.suggestions?.length > 0 && (
+                      <div className="flex flex-wrap gap-1 pt-0.5">
+                        {issue.suggestions.map((sug) => (
+                          <button
+                            key={sug}
+                            type="button"
+                            onClick={() => onApplyErrorFix?.(issue, sug)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/40 text-emerald-200 text-[10px] font-medium"
+                          >
+                            <Check className="w-2.5 h-2.5" /> {sug}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
